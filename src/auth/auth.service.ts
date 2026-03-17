@@ -103,6 +103,9 @@ export class AuthService {
 
     const payload: JwtPayload = { id: user.id };
 
+    user.lastLoginAt = new Date();
+    await this.userRepository.save(user);
+
     const { password: _pass, ...userWithoutPassword } = user;
 
     return {

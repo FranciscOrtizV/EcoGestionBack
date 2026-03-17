@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, DeleteDateColumn, OneToMany } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, DeleteDateColumn, OneToMany, BeforeInsert, BeforeUpdate } from 'typeorm';
 import { UsuarioRol } from './index';
 
 @Entity('usuarios')
@@ -83,5 +83,15 @@ export class Usuario {
     cascade: false,
   })
   usuarioRoles: UsuarioRol[];
+
+  @BeforeInsert()
+  checkFieldsBeforeInsert(){
+      this.email = this.email.toLowerCase().trim();
+  }
+
+  @BeforeUpdate()
+  checkFieldsBeforeUpdate(){
+      this.checkFieldsBeforeInsert();
+  }
 
 }
