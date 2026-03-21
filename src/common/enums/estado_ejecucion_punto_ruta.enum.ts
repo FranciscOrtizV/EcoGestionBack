@@ -1,7 +1,7 @@
 
 export enum EstadoEjecucionPuntoRutaEnum {
     PENDIENTE   = 'PENDIENTE',
-    COMPLTEADO  = 'COMPLTEADO',
+    COMPLETADO  = 'COMPLETADO',
     SALTADO     = 'SALTADO',
-    FALLIDO     = 'FALLIDO'
+    FALLIDO     = 'FALLIDO',
 }
