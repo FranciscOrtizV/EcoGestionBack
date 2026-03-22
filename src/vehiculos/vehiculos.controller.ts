@@ -1,15 +1,32 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  ParseUUIDPipe,
+} from '@nestjs/common';
 import { VehiculosService } from './vehiculos.service';
 import { CreateVehiculoDto } from './dto/create-vehiculo.dto';
 import { UpdateVehiculoDto } from './dto/update-vehiculo.dto';
+import { Auth } from 'src/auth/decorators/auth.decorator';
+import { GetUser } from 'src/auth/decorators/get-user.decorator';
+import { Usuario } from 'src/common/entities';
+import { RolesValidosEnum } from 'src/common/enums';
 
 @Controller('vehiculos')
 export class VehiculosController {
   constructor(private readonly vehiculosService: VehiculosService) {}
 
   @Post()
-  create(@Body() createVehiculoDto: CreateVehiculoDto) {
-    return this.vehiculosService.create(createVehiculoDto);
+  @Auth(RolesValidosEnum.ADMIN)
+  create(
+    @Body() createVehiculoDto: CreateVehiculoDto,
+    @GetUser() user: Usuario,
+  ) {
+    return this.vehiculosService.create(createVehiculoDto, user);
   }
 
   @Get()
@@ -17,18 +34,36 @@ export class VehiculosController {
     return this.vehiculosService.findAll();
   }
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.vehiculosService.findOne(+id);
+  @Get(':identificador')
+  findOne(@Param('identificador') identificador: string) {
+    return this.vehiculosService.findOne(identificador);
+  }
+
+  @Patch('rehabilitar/:id')
+  @Auth(RolesValidosEnum.ADMIN)
+  rehabilitar(
+    @Param('id', ParseUUIDPipe) id: string,
+    @GetUser() user: Usuario,
+  ) {
+    return this.vehiculosService.rehabilitar(id, user);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateVehiculoDto: UpdateVehiculoDto) {
-    return this.vehiculosService.update(+id, updateVehiculoDto);
+  @Auth(RolesValidosEnum.ADMIN)
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() updateVehiculoDto: UpdateVehiculoDto,
+    @GetUser() user: Usuario,
+  ) {
+    return this.vehiculosService.update(id, updateVehiculoDto, user);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.vehiculosService.remove(+id);
+  @Auth(RolesValidosEnum.ADMIN)
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @GetUser() user: Usuario,
+  ) {
+    return this.vehiculosService.remove(id, user);
   }
 }

@@ -30,7 +30,7 @@ export class Vehiculo {
     unique: true,
     nullable: true,
   })
-  codigoInterno?: string;
+  codigoInterno?: string | null;
 
   @Column({
     type: 'varchar',
