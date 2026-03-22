@@ -6,7 +6,7 @@ import {
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
-import { Usuario } from './usuarios.entity';
+import { Usuario } from './usuario.entity';
 import { AccionAuditoriaEnum } from '../enums';
 
 
@@ -31,17 +31,7 @@ export class AuditoriaLog {
 
   @Column({
     type: 'enum',
-    enum: [
-      AccionAuditoriaEnum.CREATE,
-      AccionAuditoriaEnum.UPDATE,
-      AccionAuditoriaEnum.DELETE,
-      AccionAuditoriaEnum.LOGIN,
-      AccionAuditoriaEnum.LOGOUT,
-      AccionAuditoriaEnum.START_ROUTE,
-      AccionAuditoriaEnum.CLOSE_ROUTE,
-      AccionAuditoriaEnum.CHECK_IN,
-      AccionAuditoriaEnum.REPORT_INCIDENT,
-    ], // ajusta según tu enum real
+    enum: AccionAuditoriaEnum,
   })
   accion: string;
 

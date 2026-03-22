@@ -1,4 +1,15 @@
+export { AsignacionRuta } from "./asignacion-ruta.entity";
 export { AuditoriaLog } from "./auditoria-log.entity";
+export { EjecucionRuta } from "./ejecucion-ruta.entity";
+export { Evidencia } from "./evidencia.entity";
+export { Incidencia } from "./incidencia.entity";
+export { PuntoRecoleccion } from "./punto-recoleccion.entity";
+export { PuntoRuta } from "./punto-ruta.entity";
+export { PuntoRutaEjecucion } from "./punto-ruta-ejecucion.entity";
 export { Rol } from "./roles.entity";
-export { Usuario } from "./usuarios.entity";
-export { UsuarioRol } from "./usuarios-rol.entity";
+export { Ruta } from "./ruta.entity";
+export { TipoIncidencia } from "./tipo-incidencia.entity";
+export { Usuario } from "./usuario.entity";
+export { UsuarioRol } from "./usuario-rol.entity";
+export { Vehiculo } from "./vehiculo.entity";
+export { Zona } from "./zona.entity";
