@@ -1,15 +1,32 @@
 import {
-  Entity,
-  PrimaryGeneratedColumn,
+  BeforeInsert,
+  BeforeUpdate,
   Column,
   CreateDateColumn,
-  UpdateDateColumn,
+  Entity,
   Index,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
 } from 'typeorm';
 
 @Entity('tipos_incidencia')
 @Index('idx_tipos_incidencia_active', ['isActive'])
 export class TipoIncidencia {
+  /** Mayúsculas y espacios (incl. consecutivos) sustituidos por un guion bajo. */
+  static normalizeNombre(value: string): string {
+    return value.trim().toUpperCase().replace(/\s+/g, '_');
+  }
+
+  @BeforeInsert()
+  applyNombreNormalizationInsert() {
+    this.nombre = TipoIncidencia.normalizeNombre(this.nombre);
+  }
+
+  @BeforeUpdate()
+  applyNombreNormalizationUpdate() {
+    this.nombre = TipoIncidencia.normalizeNombre(this.nombre);
+  }
+
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
