@@ -5,6 +5,7 @@ import * as entidades from './common/entities';
 import { AuthModule } from './auth/auth.module';
 import { UsuariosModule } from './usuarios/usuarios.module';
 import { VehiculosModule } from './vehiculos/vehiculos.module';
+import { TiposIncidenciasModule } from './tipos_incidencias/tipos_incidencias.module';
 
 
 @Module({
@@ -24,6 +25,7 @@ import { VehiculosModule } from './vehiculos/vehiculos.module';
     AuthModule,
     UsuariosModule,
     VehiculosModule,
+    TiposIncidenciasModule,
   ],
 })
 export class AppModule {}
