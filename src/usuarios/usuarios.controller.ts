@@ -26,6 +26,14 @@ export class UsuariosController {
     return this.usuariosService.findAll();
   }
   
+  @Get('/getMe')
+  @Auth()
+  getMe(
+    @GetUser() user: Usuario,
+  ) {
+    return this.usuariosService.findOne(user.id);
+  }
+
   @Get(':id')
   @Auth()
   findOne(@Param('id', ParseUUIDPipe) id: string) {
