@@ -109,7 +109,6 @@ export class AuthService {
     const { password: _pass, ...userWithoutPassword } = user;
 
     return {
-      ...userWithoutPassword,
       accessToken: this.getAccessToken(payload),
       refreshToken: this.getRefreshToken(payload),
     };
