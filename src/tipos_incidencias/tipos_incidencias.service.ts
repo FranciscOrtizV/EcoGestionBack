@@ -27,7 +27,7 @@ export class TiposIncidenciasService {
     private readonly dataSource: DataSource,
 
   ) {}
-
+u
   async create(createTiposIncidenciaDto: CreateTiposIncidenciaDto, user: Usuario) {
     const nombre = TipoIncidencia.normalizeNombre(createTiposIncidenciaDto.nombre);
 

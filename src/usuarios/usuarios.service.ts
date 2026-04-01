@@ -132,19 +132,18 @@ export class UsuariosService {
 
   async findAll() {
     const usuarios = await this.usuarioRepository.find({
-      where: {
-        isActive: true,
-        deletedAt: IsNull(),
-      },
       relations: ['usuarioRoles', 'usuarioRoles.rol'],
+      withDeleted: true,
+      order: { createdAt: 'DESC' }
     });
+
 
     const data = usuarios.map((usuario) => {
       const { password, usuarioRoles, ...resto } = usuario;
       return {
         ...resto,
         roles: (usuarioRoles || []).map((ur) => ({
-          id: ur.rol.id,
+          id: ur.rol.id, 
           nombre: ur.rol.nombre,
         })),
       };
@@ -153,10 +152,23 @@ export class UsuariosService {
     return buildResponse(HttpStatus.OK, 'Listado de usuarios obtenido correctamente', data);
   }
 
+  async findAllRoles() {
+    const roles = await this.rolRepository.find({
+      order: { nombre: 'ASC' },
+    });
+
+    return buildResponse(
+      HttpStatus.OK,
+      'Listado de roles obtenido correctamente',
+      roles,
+    );
+  }
+
   async findOne(id: string) {
     const usuario = await this.usuarioRepository.findOne({
       where: { id },
       relations: ['usuarioRoles', 'usuarioRoles.rol'],
+      withDeleted: true
     });
 
     if (!usuario)
@@ -197,7 +209,7 @@ export class UsuariosService {
 
       // 1. Si viene email, verificar que no esté usado por otro usuario
       if (email && email !== usuario.email) {
-        const existeEmail = await this.usuarioRepository.findOne({where: { email }});
+        const existeEmail = await this.usuarioRepository.findOne({where: { email }, withDeleted: true});
 
         if (existeEmail && existeEmail.id !== usuario.id)
           return buildResponse(HttpStatus.CONFLICT, `Ya existe un usuario registrado con el email: ${email}.`,);
