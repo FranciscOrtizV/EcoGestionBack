@@ -34,10 +34,25 @@ export class UsuariosController {
     return this.usuariosService.findOne(user.id);
   }
 
+  @Get('roles')
+  @Auth()
+  findAllRoles() {
+    return this.usuariosService.findAllRoles();
+  }
+
   @Get(':id')
   @Auth()
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.usuariosService.findOne(id);
+  }
+
+  @Patch('habilitar/:id',)
+  @Auth(RolesValidosEnum.ADMIN)
+  habilitar(
+    @Param('id', ParseUUIDPipe) id: string,
+    @GetUser() user: Usuario,
+  ) {
+    return this.usuariosService.rehabilitar(id, user);
   }
   
   @Patch(':id')
@@ -57,14 +72,5 @@ export class UsuariosController {
     @GetUser() user: Usuario,
   ) {
     return this.usuariosService.remove(id, user);
-  }
-  
-  @Patch('rehabilitar/:id')
-  @Auth(RolesValidosEnum.ADMIN)
-  rehabilitar(
-    @Param('id', ParseUUIDPipe) id: string,
-    @GetUser() user: Usuario,
-  ) {
-    return this.usuariosService.rehabilitar(id, user);
   }
 }
