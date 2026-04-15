@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module';
 import { UsuariosModule } from './usuarios/usuarios.module';
 import { VehiculosModule } from './vehiculos/vehiculos.module';
 import { TiposIncidenciasModule } from './tipos_incidencias/tipos_incidencias.module';
+import { ZonasModule } from './zonas/zonas.module';
 
 
 @Module({
@@ -26,6 +27,7 @@ import { TiposIncidenciasModule } from './tipos_incidencias/tipos_incidencias.mo
     UsuariosModule,
     VehiculosModule,
     TiposIncidenciasModule,
+    ZonasModule,
   ],
 })
 export class AppModule {}
