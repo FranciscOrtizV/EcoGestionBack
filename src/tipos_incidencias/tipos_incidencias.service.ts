@@ -27,7 +27,7 @@ export class TiposIncidenciasService {
     private readonly dataSource: DataSource,
 
   ) {}
-u
+
   async create(createTiposIncidenciaDto: CreateTiposIncidenciaDto, user: Usuario) {
     const nombre = TipoIncidencia.normalizeNombre(createTiposIncidenciaDto.nombre);
 
@@ -76,7 +76,6 @@ u
 
   async findAll() {
     const tipos = await this.tipoIncidenciaRepository.find({
-      where: { isActive: true },
       order: { nombre: 'ASC' },
     });
 
