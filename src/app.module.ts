@@ -7,6 +7,7 @@ import { UsuariosModule } from './usuarios/usuarios.module';
 import { VehiculosModule } from './vehiculos/vehiculos.module';
 import { TiposIncidenciasModule } from './tipos_incidencias/tipos_incidencias.module';
 import { ZonasModule } from './zonas/zonas.module';
+import { PuntosRecoleccionModule } from './puntos_recoleccion/puntos-recoleccion.module';
 
 
 @Module({
@@ -28,6 +29,7 @@ import { ZonasModule } from './zonas/zonas.module';
     VehiculosModule,
     TiposIncidenciasModule,
     ZonasModule,
+    PuntosRecoleccionModule,
   ],
 })
 export class AppModule {}
