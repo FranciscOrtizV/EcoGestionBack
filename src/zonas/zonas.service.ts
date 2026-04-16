@@ -83,8 +83,9 @@ export class ZonasService {
     }
   }
 
-  async findAll() {
+  async findAll(incluirInactivos = false) {
     const zonas = await this.zonaRepository.find({
+      where: incluirInactivos ? {} : { isActive: true },
       order: { nombre: 'ASC' },
     });
 
