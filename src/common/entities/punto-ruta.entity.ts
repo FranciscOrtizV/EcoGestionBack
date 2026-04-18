@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, Unique, Index } from 'typeorm';
-import { PuntoRecoleccion, Ruta } from './index';
+import { PuntoRecoleccion } from './punto-recoleccion.entity';
+import { Ruta } from './ruta.entity';
 
 @Entity('puntos_rutas')
 @Unique('uq_route_points_route_sequence', ['ruta', 'ordenSecuencia'])
