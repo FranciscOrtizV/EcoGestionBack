@@ -4,26 +4,14 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
-  ManyToOne,
-  JoinColumn,
   Index,
 } from 'typeorm';
-import { Zona } from './index';
 
 @Entity('rutas')
-@Index('idx_rutas_zona', ['zona'])
 @Index('idx_rutas_active', ['isActive'])
-@Index('idx_rutas_zona_active', ['zona', 'isActive'])
 export class Ruta {
   @PrimaryGeneratedColumn('uuid')
   id: string;
-
-  @ManyToOne(() => Zona, {
-    nullable: false,
-    onDelete: 'RESTRICT',
-  })
-  @JoinColumn({ name: 'zona_id' })
-  zona: Zona;
 
   @Column({
     type: 'varchar',
