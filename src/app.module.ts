@@ -9,6 +9,7 @@ import { TiposIncidenciasModule } from './tipos_incidencias/tipos_incidencias.mo
 import { ZonasModule } from './zonas/zonas.module';
 import { PuntosRecoleccionModule } from './puntos_recoleccion/puntos-recoleccion.module';
 import { RutasModule } from './rutas/rutas.module';
+import { AsignacionRutasModule } from './asignacion_rutas/asignacion-rutas.module';
 
 
 @Module({
@@ -32,6 +33,7 @@ import { RutasModule } from './rutas/rutas.module';
     ZonasModule,
     PuntosRecoleccionModule,
     RutasModule,
+    AsignacionRutasModule,
   ],
 })
 export class AppModule {}
