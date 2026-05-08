@@ -12,6 +12,7 @@ import {
   AsignacionRuta,
   AuditoriaLog,
   EjecucionRuta,
+  PuntoRuta,
   Ruta,
   Usuario,
   Vehiculo,
@@ -50,6 +51,9 @@ export class AsignacionRutasService {
 
     @InjectRepository(Ruta)
     private readonly rutaRepository: Repository<Ruta>,
+
+    @InjectRepository(PuntoRuta)
+    private readonly puntoRutaRepository: Repository<PuntoRuta>,
 
     @InjectRepository(Vehiculo)
     private readonly vehiculoRepository: Repository<Vehiculo>,
@@ -276,10 +280,32 @@ export class AsignacionRutasService {
         `No se encontró una asignación de ruta con id: ${id}`,
       );
 
+    const puntosRuta = await this.puntoRutaRepository.find({
+      where: { ruta: { id: item.ruta.id } },
+      relations: ['puntoRecoleccion'],
+      order: { ordenSecuencia: 'ASC' },
+    });
+
+    const puntosRutaDetalle = puntosRuta.map((pr) => ({
+      orden_secuencia: pr.ordenSecuencia,
+      nombre_punto_recoleccion: pr.puntoRecoleccion.nombre,
+      direccion: pr.puntoRecoleccion.direccion,
+      referencia: pr.puntoRecoleccion.referencia,
+      latitud: pr.puntoRecoleccion.latitud,
+      longitud: pr.puntoRecoleccion.longitud,
+      tipo_punto: pr.puntoRecoleccion.tipoPunto,
+      prioridad: pr.puntoRecoleccion.prioridad,
+    }));
+
+    const asignacion = this.sanearAsignacion(item);
+
     return buildResponse(
       HttpStatus.OK,
       'Asignación obtenida correctamente.',
-      this.sanearAsignacion(item),
+      {
+        ...asignacion,
+        puntosRuta: puntosRutaDetalle,
+      },
     );
   }
 
