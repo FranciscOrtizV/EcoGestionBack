@@ -43,6 +43,24 @@ export class RutasController {
     return this.rutasService.findAll(incluirInactivos, conPuntos);
   }
 
+  @Get('asignadas')
+  @Auth(
+    RolesValidosEnum.PLANIFICADOR,
+    RolesValidosEnum.SUPERVISOR,
+    RolesValidosEnum.CONDUCTOR,
+  )
+  findRutasAsignadas(
+    @Query('conductorId') conductorId: string | undefined,
+    @Query('planificadorId') planificadorId: string | undefined,
+    @Query('supervisorId') supervisorId: string | undefined,
+    @GetUser() user: Usuario,
+  ) {
+    return this.rutasService.findRutasAsignadas(
+      { conductorId, planificadorId, supervisorId },
+      user,
+    );
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.rutasService.findOne(id);

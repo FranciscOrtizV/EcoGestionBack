@@ -6,6 +6,7 @@ import {
   AuditoriaLog,
   EjecucionRuta,
   PuntoRuta,
+  PuntoRutaEjecucion,
   Ruta,
   Usuario,
   Vehiculo,
@@ -22,7 +23,8 @@ import { AsignacionRutasService } from './asignacion-rutas.service';
       Usuario,
       EjecucionRuta,
       AuditoriaLog,
-      PuntoRuta
+      PuntoRuta,
+      PuntoRutaEjecucion
     ]),
     AuthModule,
   ],

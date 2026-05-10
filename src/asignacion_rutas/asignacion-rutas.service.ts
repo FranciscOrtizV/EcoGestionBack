@@ -4,6 +4,7 @@ import {
   HttpStatus,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -13,6 +14,7 @@ import {
   AuditoriaLog,
   EjecucionRuta,
   PuntoRuta,
+  PuntoRutaEjecucion,
   Ruta,
   Usuario,
   Vehiculo,
@@ -21,6 +23,7 @@ import {
   AccionAuditoriaEnum,
   EntidadesEnum,
   EstadoAsignacionRutaEnum,
+  EstadoEjecucionPuntoRutaEnum,
   EstadoEjecucionRutaEnum,
   RolesValidosEnum,
   TurnoEnum,
@@ -45,6 +48,8 @@ const ESTADOS_SIN_EDICION = new Set<EstadoAsignacionRutaEnum>([
 
 @Injectable()
 export class AsignacionRutasService {
+  private readonly logger = new Logger(AsignacionRutasService.name);
+
   constructor(
     @InjectRepository(AsignacionRuta)
     private readonly asignacionRepository: Repository<AsignacionRuta>,
@@ -611,24 +616,38 @@ export class AsignacionRutasService {
   }
 
   async publicarAsignacion(id: string, user: Usuario) {
+    this.logger.log(
+      `Publicar asignación: inicio asignacionId=${id} usuarioId=${user.id}`,
+    );
+
     const asignacion = await this.findOneEntity(id);
 
-    if (!asignacion)
+    if (!asignacion) {
+      this.logger.warn(`Publicar asignación: no encontrada asignacionId=${id}`);
       throw new NotFoundException(
         `No se encontró una asignación de ruta con id: ${id}`,
       );
+    }
 
-    if (ESTADOS_SIN_EDICION.has(asignacion.estado))
+    if (ESTADOS_SIN_EDICION.has(asignacion.estado)) {
+      this.logger.warn(
+        `Publicar asignación: conflicto por estado asignacionId=${id} estado=${asignacion.estado}`,
+      );
       return buildResponse(
         HttpStatus.CONFLICT,
         'No se puede publicar una asignación en estado en proceso, completado o cancelado.',
       );
+    }
 
-    if (asignacion.estado === EstadoAsignacionRutaEnum.PUBLICADO)
+    if (asignacion.estado === EstadoAsignacionRutaEnum.PUBLICADO) {
+      this.logger.warn(
+        `Publicar asignación: ya publicada asignacionId=${id}`,
+      );
       return buildResponse(
         HttpStatus.CONFLICT,
         'La asignación ya se encuentra publicada.',
       );
+    }
 
     const antes = await this.planoAuditoriaPorId(id);
     const ahora = new Date();
@@ -642,6 +661,67 @@ export class AsignacionRutasService {
 
     try {
       await queryRunner.manager.save(asignacion);
+      this.logger.log(
+        `Publicar asignación: asignación guardada asignacionId=${id} rutaId=${asignacion.ruta.id}`,
+      );
+
+      let ejecucion = await queryRunner.manager.findOne(EjecucionRuta, {
+        where: { asignacionRuta: { id } },
+      });
+
+      if (!ejecucion) {
+        ejecucion = queryRunner.manager.create(EjecucionRuta, {
+          asignacionRuta: { id },
+          estado: EstadoEjecucionRutaEnum.NO_INICIADO,
+        });
+        ejecucion = await queryRunner.manager.save(ejecucion);
+        this.logger.log(`Publicar asignación: ejecución creada ejecucionRutaId=${ejecucion.id} asignacionId=${id}`);
+      } else {
+        this.logger.log(`Publicar asignación: ejecución ya existía ejecucionRutaId=${ejecucion.id} asignacionId=${id}`);
+      }
+
+      console.log('Comenzamos la parte critica');
+      console.log(ejecucion.id);
+
+      const yaTienePuntosEjecucion =
+        (await queryRunner.manager.count(PuntoRutaEjecucion, {
+          where: { ejecucionRuta: { id: ejecucion.id } },
+        })) > 0 || false;
+
+        console.log(yaTienePuntosEjecucion);
+
+      if (!yaTienePuntosEjecucion) {
+
+        const puntosRuta = await queryRunner.manager.find(PuntoRuta, {
+          where: { ruta: { id: asignacion.ruta.id } },
+          relations: ['puntoRecoleccion'],
+          order: { ordenSecuencia: 'ASC' },
+        });
+
+        console.log(puntosRuta);
+
+        for (const pr of puntosRuta) {
+          const pc = pr.puntoRecoleccion;
+          const fila = queryRunner.manager.create(PuntoRutaEjecucion, {
+            ejecucionRuta: { id: ejecucion.id },
+            puntoRuta: { id: pr.id },
+            puntoRecoleccion: { id: pc.id },
+            estado: EstadoEjecucionPuntoRutaEnum.PENDIENTE,
+            latitud: Number(pc.latitud),
+            longitud: Number(pc.longitud),
+            ordenSecuencia: pr.ordenSecuencia,
+          });
+          console.log(fila);
+          await queryRunner.manager.save(fila);
+        }
+        this.logger.log(
+          `Publicar asignación: puntos de ejecución creados ejecucionRutaId=${ejecucion.id} cantidad=${puntosRuta.length}`,
+        );
+      } else {
+        this.logger.log(
+          `Publicar asignación: puntos de ejecución ya existían, omitidos ejecucionRutaId=${ejecucion.id}`,
+        );
+      }
 
       const despues = await this.planoAuditoriaPorId(id, queryRunner);
 
@@ -659,12 +739,20 @@ export class AsignacionRutasService {
       await queryRunner.commitTransaction();
       await queryRunner.release();
 
+      this.logger.log(
+        `Publicar asignación: transacción confirmada asignacionId=${id} ejecucionRutaId=${ejecucion.id}`,
+      );
+
       return buildResponse(HttpStatus.OK, 'Asignación publicada correctamente.', {
         id,
       });
     } catch (error) {
       await queryRunner.rollbackTransaction();
       await queryRunner.release();
+      this.logger.error(
+        `Publicar asignación: error y rollback asignacionId=${id}`,
+        error instanceof Error ? error.stack : undefined,
+      );
       this.handleDbErrors(error);
     }
   }

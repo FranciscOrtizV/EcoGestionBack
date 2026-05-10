@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   HttpStatus,
   Injectable,
   InternalServerErrorException,
@@ -9,13 +10,15 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, QueryRunner, Repository } from 'typeorm';
 import { validate as isUuid } from 'uuid';
 import {
+  AsignacionRuta,
   AuditoriaLog,
+  EjecucionRuta,
   PuntoRecoleccion,
   PuntoRuta,
   Ruta,
   Usuario,
 } from 'src/common/entities';
-import { AccionAuditoriaEnum, EntidadesEnum } from 'src/common/enums';
+import { AccionAuditoriaEnum, EntidadesEnum, RolesValidosEnum } from 'src/common/enums';
 import { buildResponse } from 'src/common/helpers';
 import { CreateRutaDto } from './dto/create-ruta.dto';
 import { PuntoRutaLineaDto } from './dto/punto-ruta-linea.dto';
@@ -43,6 +46,12 @@ export class RutasService {
 
     @InjectRepository(AuditoriaLog)
     private readonly auditoriaLogRepository: Repository<AuditoriaLog>,
+
+    @InjectRepository(AsignacionRuta)
+    private readonly asignacionRutaRepository: Repository<AsignacionRuta>,
+
+    @InjectRepository(EjecucionRuta)
+    private readonly ejecucionRutaRepository: Repository<EjecucionRuta>,
 
     private readonly dataSource: DataSource,
   ) {}
@@ -161,6 +170,100 @@ export class RutasService {
       HttpStatus.OK,
       'Listado de rutas obtenido correctamente',
       resultado,
+    );
+  }
+
+  async findRutasAsignadas(
+    query: {
+      conductorId?: string;
+      planificadorId?: string;
+      supervisorId?: string;
+    },
+    solicitante: Usuario,
+  ) {
+    const conductorId = query.conductorId?.trim() || undefined;
+    const planificadorId = query.planificadorId?.trim() || undefined;
+    const supervisorId = query.supervisorId?.trim() || undefined;
+
+    const indicados = [conductorId, planificadorId, supervisorId].filter(
+      Boolean,
+    ) as string[];
+
+    if (indicados.length !== 1)
+      return buildResponse(
+        HttpStatus.BAD_REQUEST,
+        'Debe indicar exactamente uno de: conductorId, planificadorId o supervisorId.',
+      );
+
+    const id = indicados[0];
+
+    if (!isUuid(id))
+      return buildResponse(
+        HttpStatus.BAD_REQUEST,
+        'El identificador indicado debe ser un UUID válido.',
+      );
+
+    if (conductorId) {
+      this.assertPuedeConsultarRutasAsignadas(solicitante, 'conductor', id);
+    } else if (planificadorId) {
+      this.assertPuedeConsultarRutasAsignadas(solicitante, 'planificador', id);
+    } else {
+      this.assertPuedeConsultarRutasAsignadas(solicitante, 'supervisor', id);
+    }
+
+    const qb = this.ejecucionRutaRepository
+      .createQueryBuilder('ej')
+      .innerJoinAndSelect('ej.asignacionRuta', 'asig')
+      .innerJoinAndSelect('asig.ruta', 'ruta')
+      .innerJoinAndSelect('asig.vehiculo', 'veh')
+      .orderBy('asig.fechaAsignacion', 'DESC')
+      .addOrderBy('asig.turno', 'ASC');
+
+    if (conductorId) {
+      qb.innerJoin('asig.conductor', 'filtroUsuario').where(
+        'filtroUsuario.id = :usuarioFiltroId',
+        { usuarioFiltroId: id },
+      );
+    } else if (planificadorId) {
+      qb.innerJoin('asig.planificador', 'filtroUsuario').where(
+        'filtroUsuario.id = :usuarioFiltroId',
+        { usuarioFiltroId: id },
+      );
+    } else {
+      qb.innerJoin('asig.supervisor', 'filtroUsuario').where(
+        'filtroUsuario.id = :usuarioFiltroId',
+        { usuarioFiltroId: id },
+      );
+    }
+
+    const ejecuciones = await qb.getMany();
+
+    const items = ejecuciones.map((ej) => {
+      const asig = ej.asignacionRuta;
+      const ruta = asig.ruta;
+      const veh = asig.vehiculo;
+
+      return {
+        ejecucionRutaId: ej.id,
+        nombre: ruta.nombre,
+        codigo: ruta.codigo ?? null,
+        descripcion: ruta.descripcion ?? null,
+        tipoRuta: ruta.tipoRuta ?? null,
+        estimacionMinutos: ruta.estimacionDuracionMinutos ?? null,
+        estado: ej.estado,
+        planificacionTiempoInicio: asig.planificacionTiempoInicio ?? null,
+        planificacionTiempoFin: asig.planificacionTiempoFin ?? null,
+        modeloVehiculo: veh.modelo ?? null,
+        patente: veh.patente,
+        capacidadKg:
+          veh.capacidadKg != null ? Number(veh.capacidadKg) : null,
+      };
+    });
+
+    return buildResponse(
+      HttpStatus.OK,
+      'Ejecuciones de ruta obtenidas correctamente según el filtro indicado.',
+      items,
     );
   }
 
@@ -433,6 +536,32 @@ export class RutasService {
       await queryRunner.release();
       this.handleDbErrors(error);
     }
+  }
+
+  private assertPuedeConsultarRutasAsignadas(
+    solicitante: Usuario,
+    filtro: 'conductor' | 'planificador' | 'supervisor',
+    usuarioId: string,
+  ) {
+    const nombresRol =
+      solicitante.usuarioRoles?.map((ur) => ur.rol?.nombre).filter(Boolean) ?? [];
+
+    const puedeElevado = [
+      RolesValidosEnum.ADMIN,
+      RolesValidosEnum.PLANIFICADOR,
+      RolesValidosEnum.SUPERVISOR,
+    ].some((r) => nombresRol.includes(r));
+
+    if (puedeElevado) return;
+
+    const esConductor = nombresRol.includes(RolesValidosEnum.CONDUCTOR);
+
+    if (filtro === 'conductor' && esConductor && solicitante.id === usuarioId)
+      return;
+
+    throw new ForbiddenException(
+      'No tiene permiso para consultar rutas con el filtro indicado.',
+    );
   }
 
   private validarLineasPuntos(lineas: PuntoRutaLineaDto[]) {
