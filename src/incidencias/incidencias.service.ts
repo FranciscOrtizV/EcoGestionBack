@@ -10,6 +10,12 @@ import { validate as isUuid } from 'uuid';
 import { Evidencia, Incidencia, Ruta, Usuario } from 'src/common/entities';
 import { EstadoIncidenciaEnum } from 'src/common/enums';
 import { buildResponse } from 'src/common/helpers';
+import { ResolverIncidenciaDto } from './dto/resolver-incidencia.dto';
+
+const ESTADOS_RESOLUCION_VALIDOS = new Set<EstadoIncidenciaEnum>([
+  EstadoIncidenciaEnum.RESUELTA,
+  EstadoIncidenciaEnum.CERRADA,
+]);
 
 const RELACIONES_INCIDENCIA = {
   tipoIncidencia: true,
@@ -66,6 +72,8 @@ export type IncidenciaDetalleDto = {
   latitud: number | null;
   longitud: number | null;
   evidencias: IncidenciaEvidenciaItemDto[];
+  comentarioResolucion: string | null;
+  fechaResolucion: Date | null;
 };
 
 @Injectable()
@@ -120,6 +128,56 @@ export class IncidenciasService {
       HttpStatus.OK,
       'Detalle de incidencia obtenido correctamente.',
       this.mapIncidenciaDetalle(incidencia, evidencias),
+    );
+  }
+
+  async resolver(id: string, dto: ResolverIncidenciaDto, user: Usuario) {
+    if (!ESTADOS_RESOLUCION_VALIDOS.has(dto.estado)) {
+      return buildResponse(
+        HttpStatus.BAD_REQUEST,
+        'El estado debe ser RESUELTA o CERRADA para registrar la resolución.',
+      );
+    }
+
+    const incidencia = await this.incidenciaRepository.findOne({
+      where: { id },
+    });
+
+    if (!incidencia) {
+      throw new NotFoundException(`No se encontró una incidencia con id: ${id}`);
+    }
+
+    if (
+      incidencia.estado === EstadoIncidenciaEnum.RESUELTA ||
+      incidencia.estado === EstadoIncidenciaEnum.CERRADA
+    ) {
+      return buildResponse(
+        HttpStatus.CONFLICT,
+        'La incidencia ya fue resuelta o cerrada y no puede modificarse.',
+      );
+    }
+
+    const comentarioResolucion = dto.comentarioResolucion.trim();
+    const ahora = new Date();
+
+    incidencia.estado = dto.estado;
+    incidencia.comentarioResolucion = comentarioResolucion;
+    incidencia.resolvedAt = ahora;
+    incidencia.asignadoAUsuario = user;
+    incidencia.updatedAt = ahora;
+
+    const incidenciaActualizada = await this.incidenciaRepository.save(incidencia);
+
+    return buildResponse(
+      HttpStatus.OK,
+      'Incidencia resuelta correctamente.',
+      {
+        id: incidenciaActualizada.id,
+        estado: incidenciaActualizada.estado,
+        comentarioResolucion: incidenciaActualizada.comentarioResolucion,
+        fechaResolucion: incidenciaActualizada.resolvedAt,
+        resueltoPor: this.mapUsuarioResumen(user),
+      },
     );
   }
 
@@ -192,6 +250,8 @@ export class IncidenciasService {
       latitud: incidencia.latitud != null ? Number(incidencia.latitud) : null,
       longitud: incidencia.longitud != null ? Number(incidencia.longitud) : null,
       evidencias: evidencias.map((evidencia) => this.mapEvidenciaToDto(evidencia)),
+      comentarioResolucion: incidencia.comentarioResolucion ?? null,
+      fechaResolucion: incidencia.resolvedAt ?? null,
     };
   }
 

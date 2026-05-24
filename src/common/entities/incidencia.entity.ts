@@ -115,4 +115,11 @@ export class Incidencia {
     type: 'timestamp without time zone',
   })
   updatedAt: Date;
+
+  @Column({
+    name: 'comentario_resolucion',
+    type: 'text',
+    nullable: true,
+  })
+  comentarioResolucion?: string;
 }
