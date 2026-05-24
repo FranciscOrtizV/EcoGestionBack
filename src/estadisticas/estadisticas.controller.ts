@@ -1,6 +1,7 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { Auth } from 'src/auth/decorators/auth.decorator';
 import { RolesValidosEnum } from 'src/common/enums';
+import { FiltroMetricasCamionerosDto } from './dto/filtro-metricas-camioneros.dto';
 import { FiltroMetricasIncidenciasDto } from './dto/filtro-metricas-incidencias.dto';
 import { FiltroMetricasPuntosRetiroDto } from './dto/filtro-metricas-puntos-retiro.dto';
 import { FiltroMetricasRutasDto } from './dto/filtro-metricas-rutas.dto';
@@ -38,5 +39,15 @@ export class EstadisticasController {
   )
   obtenerMetricasPuntosRetiro(@Query() query: FiltroMetricasPuntosRetiroDto) {
     return this.estadisticasService.obtenerMetricasPuntosRetiro(query);
+  }
+
+  @Get('camioneros')
+  @Auth(
+    RolesValidosEnum.ADMIN,
+    RolesValidosEnum.PLANIFICADOR,
+    RolesValidosEnum.SUPERVISOR,
+  )
+  obtenerMetricasCamioneros(@Query() query: FiltroMetricasCamionerosDto) {
+    return this.estadisticasService.obtenerMetricasCamioneros(query);
   }
 }

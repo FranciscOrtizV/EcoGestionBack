@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+﻿import { HttpStatus, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
 import { EjecucionRuta, Incidencia, PuntoRutaEjecucion } from 'src/common/entities';
@@ -10,6 +10,7 @@ import {
   TipoPuntoColeccionEnum,
 } from 'src/common/enums';
 import { buildResponse } from 'src/common/helpers';
+import { FiltroMetricasCamionerosDto } from './dto/filtro-metricas-camioneros.dto';
 import { FiltroMetricasIncidenciasDto } from './dto/filtro-metricas-incidencias.dto';
 import { FiltroMetricasPuntosRetiroDto } from './dto/filtro-metricas-puntos-retiro.dto';
 import { FiltroMetricasRutasDto } from './dto/filtro-metricas-rutas.dto';
@@ -79,7 +80,7 @@ export class EstadisticasService {
 
     return buildResponse(
       HttpStatus.OK,
-      'Métricas de rutas y ejecución obtenidas correctamente',
+      'MÃ©tricas de rutas y ejecuciÃ³n obtenidas correctamente',
       data,
     );
   }
@@ -142,7 +143,7 @@ export class EstadisticasService {
 
     return buildResponse(
       HttpStatus.OK,
-      'Métricas de incidencias obtenidas correctamente',
+      'MÃ©tricas de incidencias obtenidas correctamente',
       data,
     );
   }
@@ -201,7 +202,103 @@ export class EstadisticasService {
 
     return buildResponse(
       HttpStatus.OK,
-      'Métricas de puntos de retiro obtenidas correctamente',
+      'MÃ©tricas de puntos de retiro obtenidas correctamente',
+      data,
+    );
+  }
+
+  async obtenerMetricasCamioneros(filtro: FiltroMetricasCamionerosDto = {}) {
+    const { desde, hasta } = filtro;
+    const margenMinutosATiempo =
+      filtro.margenMinutosATiempo ?? MARGEN_MINUTOS_A_TIEMPO_DEFAULT;
+
+    const [
+      detalleRutas,
+      puntosPorConductor,
+      incidenciasEnRutas,
+      incidenciasReportadas,
+      backlogActual,
+    ] = await Promise.all([
+      this.obtenerDetalleRutasCamioneros(desde, hasta, margenMinutosATiempo),
+      this.obtenerPuntosPorConductor(desde, hasta),
+      this.obtenerIncidenciasEnRutasPorConductor(desde, hasta),
+      this.obtenerIncidenciasReportadasPorConductor(desde, hasta),
+      this.obtenerBacklogCamioneros(),
+    ]);
+
+    const puntosMap = new Map(
+      puntosPorConductor.map((item) => [item.conductorId, item]),
+    );
+    const incidenciasRutasMap = new Map(
+      incidenciasEnRutas.map((item) => [item.conductorId, item.total]),
+    );
+    const incidenciasReportadasMap = new Map(
+      incidenciasReportadas.map((item) => [item.conductorId, item.total]),
+    );
+
+    const porConductor = detalleRutas.map((conductor) => {
+      const puntos = puntosMap.get(conductor.conductorId);
+      const puntosTotales = puntos?.puntosTotales ?? 0;
+      const puntosAtendidos = puntos?.puntosAtendidos ?? 0;
+
+      return {
+        ...conductor,
+        porcentajeCompletadasATiempo: this.calcularPorcentaje(
+          conductor.rutasCompletadasATiempo,
+          conductor.rutasEvaluablesTiempo,
+        ),
+        puntosTotales,
+        puntosAtendidos,
+        porcentajePuntosAtendidos: this.calcularPorcentaje(
+          puntosAtendidos,
+          puntosTotales,
+        ),
+        incidenciasEnSusRutas:
+          incidenciasRutasMap.get(conductor.conductorId) ?? 0,
+        incidenciasReportadas:
+          incidenciasReportadasMap.get(conductor.conductorId) ?? 0,
+      };
+    });
+
+    const rankingMasRutas = [...porConductor].sort(
+      (a, b) => b.rutasAsignadas - a.rutasAsignadas,
+    );
+
+    const rankingMenorTiempoPromedio = porConductor
+      .filter((item) => item.tiempoPromedioMinutosPorRuta != null)
+      .sort(
+        (a, b) =>
+          (a.tiempoPromedioMinutosPorRuta ?? 0) -
+          (b.tiempoPromedioMinutosPorRuta ?? 0),
+      );
+
+    const data = {
+      periodo: { desde: desde ?? null, hasta: hasta ?? null },
+      margenMinutosATiempo,
+      resumen: {
+        totalCamionerosConActividad: porConductor.length,
+        totalRutasAsignadas: porConductor.reduce(
+          (acc, item) => acc + item.rutasAsignadas,
+          0,
+        ),
+        totalRutasEjecutadas: porConductor.reduce(
+          (acc, item) => acc + item.rutasEjecutadas,
+          0,
+        ),
+        totalRutasCompletadas: porConductor.reduce(
+          (acc, item) => acc + item.rutasCompletadas,
+          0,
+        ),
+      },
+      rankingMasRutas,
+      rankingMenorTiempoPromedio,
+      backlogActual,
+      porConductor,
+    };
+
+    return buildResponse(
+      HttpStatus.OK,
+      'MÃ©tricas de camioneros obtenidas correctamente',
       data,
     );
   }
@@ -1013,6 +1110,284 @@ export class EstadisticasService {
       fila?.promedio_km != null ? Number(fila.promedio_km) : null;
 
     return { promedio, totalConOdometro };
+  }
+
+  private async obtenerDetalleRutasCamioneros(
+    desde?: string,
+    hasta?: string,
+    margenMinutos: number = MARGEN_MINUTOS_A_TIEMPO_DEFAULT,
+  ): Promise<
+    Array<{
+      conductorId: string;
+      nombreCompleto: string;
+      rutasAsignadas: number;
+      rutasEjecutadas: number;
+      rutasCompletadas: number;
+      rutasParciales: number;
+      rutasCanceladas: number;
+      tiempoPromedioMinutosPorRuta: number | null;
+      promedioKilometrosPorRuta: number | null;
+      rutasEvaluablesTiempo: number;
+      rutasCompletadasATiempo: number;
+    }>
+  > {
+    const { sql, parametros } = this.construirFiltroFechaAsignacionSql(
+      desde,
+      hasta,
+      2,
+    );
+
+    const filas = await this.ejecucionRutaRepository.query(
+      `
+      SELECT
+        u.id AS conductor_id,
+        TRIM(
+          CONCAT(
+            u.nombre,
+            ' ',
+            u.apellido_paterno,
+            ' ',
+            COALESCE(u.apellido_materno, '')
+          )
+        ) AS nombre_completo,
+        COUNT(DISTINCT a.id)::int AS rutas_asignadas,
+        COUNT(DISTINCT e.id) FILTER (
+          WHERE e.id IS NOT NULL AND e.estado != 'NO_INICIADO'
+        )::int AS rutas_ejecutadas,
+        COUNT(DISTINCT e.id) FILTER (WHERE e.estado = 'COMPLETADO')::int AS rutas_completadas,
+        COUNT(DISTINCT e.id) FILTER (WHERE e.estado = 'PARCIAL')::int AS rutas_parciales,
+        COUNT(DISTINCT e.id) FILTER (WHERE e.estado = 'CANCELADO')::int AS rutas_canceladas,
+        ROUND(
+          AVG(EXTRACT(EPOCH FROM (e.tiempo_fin - e.tiempo_inicio)) / 60.0)
+          FILTER (
+            WHERE e.tiempo_inicio IS NOT NULL AND e.tiempo_fin IS NOT NULL
+          )::numeric,
+          2
+        ) AS tiempo_promedio_minutos,
+        ROUND(
+          AVG(e.odometro_fin - e.odometro_inicio)
+          FILTER (
+            WHERE e.odometro_inicio IS NOT NULL
+              AND e.odometro_fin IS NOT NULL
+              AND e.odometro_fin >= e.odometro_inicio
+          )::numeric,
+          2
+        ) AS promedio_kilometros,
+        COUNT(*) FILTER (
+          WHERE e.estado IN ('COMPLETADO', 'PARCIAL')
+            AND e.tiempo_inicio IS NOT NULL
+            AND e.tiempo_fin IS NOT NULL
+            AND COALESCE(
+              r.estimacion_duracion_minutos,
+              EXTRACT(EPOCH FROM (a.planificacion_tiempo_fin - a.planificacion_tiempo_inicio)) / 60.0
+            ) IS NOT NULL
+        )::int AS rutas_evaluables_tiempo,
+        COUNT(*) FILTER (
+          WHERE e.estado IN ('COMPLETADO', 'PARCIAL')
+            AND e.tiempo_inicio IS NOT NULL
+            AND e.tiempo_fin IS NOT NULL
+            AND COALESCE(
+              r.estimacion_duracion_minutos,
+              EXTRACT(EPOCH FROM (a.planificacion_tiempo_fin - a.planificacion_tiempo_inicio)) / 60.0
+            ) IS NOT NULL
+            AND EXTRACT(EPOCH FROM (e.tiempo_fin - e.tiempo_inicio)) / 60.0 <= COALESCE(
+              r.estimacion_duracion_minutos,
+              EXTRACT(EPOCH FROM (a.planificacion_tiempo_fin - a.planificacion_tiempo_inicio)) / 60.0
+            ) + $1
+        )::int AS rutas_a_tiempo
+      FROM asignacion_rutas a
+      INNER JOIN usuarios u ON u.id = a.conductor_id AND u.deleted_at IS NULL
+      INNER JOIN rutas r ON r.id = a.ruta_id
+      LEFT JOIN ejecucion_rutas e ON e.asignacion_ruta_id = a.id
+      WHERE 1 = 1
+        ${sql}
+      GROUP BY u.id, u.nombre, u.apellido_paterno, u.apellido_materno
+      ORDER BY rutas_asignadas DESC
+      `,
+      [margenMinutos, ...parametros],
+    );
+
+    return filas.map(
+      (fila: {
+        conductor_id: string;
+        nombre_completo: string;
+        rutas_asignadas: number;
+        rutas_ejecutadas: number;
+        rutas_completadas: number;
+        rutas_parciales: number;
+        rutas_canceladas: number;
+        tiempo_promedio_minutos: string | null;
+        promedio_kilometros: string | null;
+        rutas_evaluables_tiempo: number;
+        rutas_a_tiempo: number;
+      }) => ({
+        conductorId: fila.conductor_id,
+        nombreCompleto: fila.nombre_completo,
+        rutasAsignadas: Number(fila.rutas_asignadas),
+        rutasEjecutadas: Number(fila.rutas_ejecutadas),
+        rutasCompletadas: Number(fila.rutas_completadas),
+        rutasParciales: Number(fila.rutas_parciales),
+        rutasCanceladas: Number(fila.rutas_canceladas),
+        tiempoPromedioMinutosPorRuta:
+          fila.tiempo_promedio_minutos != null
+            ? Number(fila.tiempo_promedio_minutos)
+            : null,
+        promedioKilometrosPorRuta:
+          fila.promedio_kilometros != null
+            ? Number(fila.promedio_kilometros)
+            : null,
+        rutasEvaluablesTiempo: Number(fila.rutas_evaluables_tiempo),
+        rutasCompletadasATiempo: Number(fila.rutas_a_tiempo),
+      }),
+    );
+  }
+
+  private async obtenerPuntosPorConductor(
+    desde?: string,
+    hasta?: string,
+  ): Promise<
+    Array<{
+      conductorId: string;
+      puntosTotales: number;
+      puntosAtendidos: number;
+    }>
+  > {
+    const { sql, parametros } = this.construirFiltroFechaAsignacionSql(
+      desde,
+      hasta,
+    );
+
+    const filas = await this.ejecucionRutaRepository.query(
+      `
+      SELECT
+        a.conductor_id,
+        COUNT(pre.id)::int AS puntos_totales,
+        COUNT(*) FILTER (WHERE pre.estado = 'COMPLETADO')::int AS puntos_atendidos
+      FROM asignacion_rutas a
+      INNER JOIN ejecucion_rutas e ON e.asignacion_ruta_id = a.id
+      INNER JOIN punto_ruta_ejecucion pre ON pre.ejecucion_ruta_id = e.id
+      WHERE 1 = 1
+        ${sql}
+      GROUP BY a.conductor_id
+      `,
+      parametros,
+    );
+
+    return filas.map(
+      (fila: {
+        conductor_id: string;
+        puntos_totales: number;
+        puntos_atendidos: number;
+      }) => ({
+        conductorId: fila.conductor_id,
+        puntosTotales: Number(fila.puntos_totales),
+        puntosAtendidos: Number(fila.puntos_atendidos),
+      }),
+    );
+  }
+
+  private async obtenerIncidenciasEnRutasPorConductor(
+    desde?: string,
+    hasta?: string,
+  ): Promise<Array<{ conductorId: string; total: number }>> {
+    const { sql, parametros } = this.construirFiltroFechaAsignacionSql(
+      desde,
+      hasta,
+    );
+
+    const filas = await this.ejecucionRutaRepository.query(
+      `
+      SELECT
+        conductor_id,
+        COUNT(*)::int AS total
+      FROM (
+        SELECT DISTINCT a.conductor_id, i.id AS incidencia_id
+        FROM incidencias i
+        INNER JOIN ejecucion_rutas e ON i.ejecucion_ruta_id = e.id
+        INNER JOIN asignacion_rutas a ON a.id = e.asignacion_ruta_id
+        WHERE 1 = 1
+          ${sql}
+        UNION
+        SELECT DISTINCT a.conductor_id, i.id AS incidencia_id
+        FROM incidencias i
+        INNER JOIN punto_ruta_ejecucion pre ON i.punto_ejecucion_ruta_id = pre.id
+        INNER JOIN ejecucion_rutas e ON e.id = pre.ejecucion_ruta_id
+        INNER JOIN asignacion_rutas a ON a.id = e.asignacion_ruta_id
+        WHERE 1 = 1
+          ${sql}
+      ) incidencias_conductor
+      GROUP BY conductor_id
+      `,
+      parametros,
+    );
+
+    return filas.map((fila: { conductor_id: string; total: number }) => ({
+      conductorId: fila.conductor_id,
+      total: Number(fila.total),
+    }));
+  }
+
+  private async obtenerIncidenciasReportadasPorConductor(
+    desde?: string,
+    hasta?: string,
+  ): Promise<Array<{ conductorId: string; total: number }>> {
+    const { sql, parametros } = this.construirFiltroFechaAsignacionSql(
+      desde,
+      hasta,
+    );
+
+    const filas = await this.ejecucionRutaRepository.query(
+      `
+      SELECT
+        conductor_id,
+        COUNT(*)::int AS total
+      FROM (
+        SELECT DISTINCT a.conductor_id, i.id AS incidencia_id
+        FROM incidencias i
+        INNER JOIN ejecucion_rutas e ON i.ejecucion_ruta_id = e.id
+        INNER JOIN asignacion_rutas a ON a.id = e.asignacion_ruta_id
+        WHERE i.reportado_por_usuario_id = a.conductor_id
+          ${sql}
+        UNION
+        SELECT DISTINCT a.conductor_id, i.id AS incidencia_id
+        FROM incidencias i
+        INNER JOIN punto_ruta_ejecucion pre ON i.punto_ejecucion_ruta_id = pre.id
+        INNER JOIN ejecucion_rutas e ON e.id = pre.ejecucion_ruta_id
+        INNER JOIN asignacion_rutas a ON a.id = e.asignacion_ruta_id
+        WHERE i.reportado_por_usuario_id = a.conductor_id
+          ${sql}
+      ) incidencias_reportadas
+      GROUP BY conductor_id
+      `,
+      parametros,
+    );
+
+    return filas.map((fila: { conductor_id: string; total: number }) => ({
+      conductorId: fila.conductor_id,
+      total: Number(fila.total),
+    }));
+  }
+
+  private async obtenerBacklogCamioneros(): Promise<{
+    conductoresConRutaEnProgreso: number;
+    conductoresConRutaParcial: number;
+  }> {
+    const [fila] = await this.ejecucionRutaRepository.query(`
+      SELECT
+        COUNT(DISTINCT a.conductor_id) FILTER (
+          WHERE e.estado = 'EN_PROGRESO'
+        )::int AS en_progreso,
+        COUNT(DISTINCT a.conductor_id) FILTER (
+          WHERE e.estado = 'PARCIAL'
+        )::int AS parcial
+      FROM ejecucion_rutas e
+      INNER JOIN asignacion_rutas a ON a.id = e.asignacion_ruta_id
+    `);
+
+    return {
+      conductoresConRutaEnProgreso: Number(fila?.en_progreso ?? 0),
+      conductoresConRutaParcial: Number(fila?.parcial ?? 0),
+    };
   }
 
   private calcularPorcentaje(
