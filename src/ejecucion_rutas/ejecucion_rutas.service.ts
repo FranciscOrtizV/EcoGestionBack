@@ -1,12 +1,38 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
-import { EjecucionRuta, Evidencia, PuntoRutaEjecucion } from 'src/common/entities';
 import {
+  ForbiddenException,
+  HttpStatus,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { DataSource, In, Repository } from 'typeorm';
+import {
+  AsignacionRuta,
+  EjecucionRuta,
+  Evidencia,
+  PuntoRutaEjecucion,
+  Usuario,
+} from 'src/common/entities';
+import {
+  EstadoAsignacionRutaEnum,
   EstadoEjecucionPuntoRutaEnum,
+  EstadoEjecucionRutaEnum,
+  RolesValidosEnum,
   TipoPuntoColeccionEnum,
   TurnoEnum,
 } from 'src/common/enums';
+import { buildResponse } from 'src/common/helpers';
+import { IniciarEjecucionRutaDto } from './dto/iniciar-ejecucion-ruta.dto';
+
+const ESTADOS_ASIGNACION_NO_INICIABLES = new Set<EstadoAsignacionRutaEnum>([
+  EstadoAsignacionRutaEnum.COMPLETADO,
+  EstadoAsignacionRutaEnum.CANCELADO,
+]);
+
+const ESTADOS_EJECUCION_NO_INICIABLES = new Set<EstadoEjecucionRutaEnum>([
+  EstadoEjecucionRutaEnum.COMPLETADO,
+  EstadoEjecucionRutaEnum.CANCELADO,
+]);
 
 export type EvidenciaPuntoItemDto = {
   id: string;
@@ -58,6 +84,7 @@ export class EjecucionRutasService {
     private readonly puntoRutaEjecucionRepo: Repository<PuntoRutaEjecucion>,
     @InjectRepository(Evidencia)
     private readonly evidenciaRepo: Repository<Evidencia>,
+    private readonly dataSource: DataSource,
   ) {}
 
   private mapEvidenciaToDto(evidencia: Evidencia): EvidenciaPuntoItemDto {
@@ -77,6 +104,113 @@ export class EjecucionRutasService {
       takenAt: evidencia.takenAt ?? null,
       createdAt: evidencia.createdAt,
     };
+  }
+
+  async iniciar(
+    ejecucionRutaId: string,
+    dto: IniciarEjecucionRutaDto,
+    user: Usuario,
+  ) {
+    const ejecucion = await this.ejecucionRutaRepo.findOne({
+      where: { id: ejecucionRutaId },
+      relations: {
+        asignacionRuta: { conductor: true },
+      },
+    });
+
+    if (!ejecucion?.asignacionRuta) {
+      throw new NotFoundException(
+        `No se encontró una ejecución de ruta con id: ${ejecucionRutaId}`,
+      );
+    }
+
+    if (ejecucion.tiempoInicio) {
+      return buildResponse(
+        HttpStatus.CONFLICT,
+        'La ejecución de ruta ya fue iniciada.',
+      );
+    }
+
+    if (ESTADOS_EJECUCION_NO_INICIABLES.has(ejecucion.estado)) {
+      return buildResponse(
+        HttpStatus.CONFLICT,
+        'No se puede iniciar una ejecución en estado completado o cancelado.',
+      );
+    }
+
+    const asignacion = ejecucion.asignacionRuta;
+
+    if (ESTADOS_ASIGNACION_NO_INICIABLES.has(asignacion.estado)) {
+      return buildResponse(
+        HttpStatus.CONFLICT,
+        'No se puede iniciar una ejecución cuya asignación está completada o cancelada.',
+      );
+    }
+
+    this.assertUsuarioPuedeIniciar(user, asignacion);
+
+    const ahora = new Date();
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      ejecucion.tiempoInicio = ahora;
+      ejecucion.estado = EstadoEjecucionRutaEnum.EN_PROGRESO;
+      ejecucion.iniciadoPorUsuario = { id: user.id } as Usuario;
+      ejecucion.latitudInicio = dto.latitudInicio;
+      ejecucion.longitudInicio = dto.longitudInicio;
+      ejecucion.odometroInicio = dto.odometroInicio;
+      ejecucion.updatedAt = ahora;
+
+      await queryRunner.manager.save(ejecucion);
+
+      if (asignacion.estado !== EstadoAsignacionRutaEnum.EN_PROCESO) {
+        asignacion.estado = EstadoAsignacionRutaEnum.EN_PROCESO;
+        asignacion.updatedAt = ahora;
+        await queryRunner.manager.save(asignacion);
+      }
+
+      await queryRunner.commitTransaction();
+      await queryRunner.release();
+
+      return buildResponse(HttpStatus.OK, 'Ejecución de ruta iniciada correctamente.', {
+        ejecucionId: ejecucion.id,
+        asignacionId: asignacion.id,
+        tiempoInicio: ahora,
+        latitudInicio: dto.latitudInicio,
+        longitudInicio: dto.longitudInicio,
+        odometroInicio: dto.odometroInicio,
+      });
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      await queryRunner.release();
+      throw error;
+    }
+  }
+
+  private assertUsuarioPuedeIniciar(
+    user: Usuario,
+    asignacion: AsignacionRuta,
+  ) {
+    const nombresRol =
+      user.usuarioRoles?.map((ur) => ur.rol?.nombre).filter(Boolean) ?? [];
+
+    const puedeElevado = [
+      RolesValidosEnum.ADMIN,
+      RolesValidosEnum.PLANIFICADOR,
+      RolesValidosEnum.SUPERVISOR,
+    ].some((r) => nombresRol.includes(r));
+
+    if (puedeElevado) return;
+
+    const esConductor = nombresRol.includes(RolesValidosEnum.CONDUCTOR);
+
+    if (esConductor && user.id === asignacion.conductor.id) return;
+
+    throw new ForbiddenException(
+      'No tiene permiso para iniciar esta ejecución de ruta.',
+    );
   }
 
   async getResumenPorId(ejecucionRutaId: string): Promise<ResumenEjecucionRutaDto> {
