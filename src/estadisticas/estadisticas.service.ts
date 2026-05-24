@@ -1,14 +1,17 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
-import { EjecucionRuta, Incidencia } from 'src/common/entities';
+import { EjecucionRuta, Incidencia, PuntoRutaEjecucion } from 'src/common/entities';
 import {
+  EstadoEjecucionPuntoRutaEnum,
   EstadoEjecucionRutaEnum,
   EstadoIncidenciaEnum,
   PrioridadIncidenciaEnum,
+  TipoPuntoColeccionEnum,
 } from 'src/common/enums';
 import { buildResponse } from 'src/common/helpers';
 import { FiltroMetricasIncidenciasDto } from './dto/filtro-metricas-incidencias.dto';
+import { FiltroMetricasPuntosRetiroDto } from './dto/filtro-metricas-puntos-retiro.dto';
 import { FiltroMetricasRutasDto } from './dto/filtro-metricas-rutas.dto';
 
 const MARGEN_MINUTOS_A_TIEMPO_DEFAULT = 15;
@@ -21,6 +24,9 @@ export class EstadisticasService {
 
     @InjectRepository(Incidencia)
     private readonly incidenciaRepository: Repository<Incidencia>,
+
+    @InjectRepository(PuntoRutaEjecucion)
+    private readonly puntoRutaEjecucionRepository: Repository<PuntoRutaEjecucion>,
   ) {}
 
   async obtenerMetricasRutas(filtro: FiltroMetricasRutasDto = {}) {
@@ -141,6 +147,65 @@ export class EstadisticasService {
     );
   }
 
+  async obtenerMetricasPuntosRetiro(filtro: FiltroMetricasPuntosRetiroDto = {}) {
+    const { desde, hasta } = filtro;
+
+    const [
+      totalPuntos,
+      distribucionPorEstado,
+      distribucionPorTipoPunto,
+      porZona,
+      porcentajeAtendidosPorRuta,
+      puntosConMasProblemas,
+      puntosAtendidosDiarios,
+      backlogActual,
+    ] = await Promise.all([
+      this.contarPuntosRetiro(desde, hasta),
+      this.obtenerDistribucionPuntosPorEstado(desde, hasta),
+      this.obtenerDistribucionPuntosPorTipo(desde, hasta),
+      this.obtenerMetricasPuntosPorZona(desde, hasta),
+      this.obtenerPorcentajeAtendidosPorRuta(desde, hasta),
+      this.obtenerPuntosConMasProblemas(desde, hasta),
+      this.obtenerPuntosAtendidosDiarios(desde, hasta),
+      this.obtenerBacklogPuntosRetiro(),
+    ]);
+
+    const atendidos =
+      distribucionPorEstado[EstadoEjecucionPuntoRutaEnum.COMPLETADO];
+    const porAtender =
+      distribucionPorEstado[EstadoEjecucionPuntoRutaEnum.PENDIENTE];
+    const saltados =
+      distribucionPorEstado[EstadoEjecucionPuntoRutaEnum.SALTADO];
+    const fallidos =
+      distribucionPorEstado[EstadoEjecucionPuntoRutaEnum.FALLIDO];
+
+    const data = {
+      periodo: { desde: desde ?? null, hasta: hasta ?? null },
+      resumen: {
+        totalPuntos,
+        atendidos,
+        porAtender,
+        saltados,
+        fallidos,
+        porcentajeAtendidos: this.calcularPorcentaje(atendidos, totalPuntos),
+        porcentajePorAtender: this.calcularPorcentaje(porAtender, totalPuntos),
+      },
+      backlogActual,
+      distribucionPorEstado,
+      distribucionPorTipoPunto,
+      porZona,
+      porcentajeAtendidosPorRuta,
+      puntosConMasProblemas,
+      puntosAtendidosDiarios,
+    };
+
+    return buildResponse(
+      HttpStatus.OK,
+      'Métricas de puntos de retiro obtenidas correctamente',
+      data,
+    );
+  }
+
   private crearQueryBase(
     desde?: string,
     hasta?: string,
@@ -151,6 +216,349 @@ export class EstadisticasService {
 
     this.aplicarFiltroFecha(qb, desde, hasta);
     return qb;
+  }
+
+  private crearQueryBasePuntosRetiro(
+    desde?: string,
+    hasta?: string,
+  ): SelectQueryBuilder<PuntoRutaEjecucion> {
+    const qb = this.puntoRutaEjecucionRepository
+      .createQueryBuilder('pre')
+      .innerJoin('pre.ejecucionRuta', 'e')
+      .innerJoin('e.asignacionRuta', 'a');
+
+    this.aplicarFiltroFechaPuntos(qb, desde, hasta);
+    return qb;
+  }
+
+  private aplicarFiltroFechaPuntos(
+    qb: SelectQueryBuilder<PuntoRutaEjecucion>,
+    desde?: string,
+    hasta?: string,
+  ): void {
+    if (desde) {
+      qb.andWhere('a.fecha_asignacion >= :desde', { desde });
+    }
+    if (hasta) {
+      qb.andWhere('a.fecha_asignacion <= :hasta', { hasta });
+    }
+  }
+
+  private construirFiltroFechaAsignacionSql(
+    desde?: string,
+    hasta?: string,
+    indiceInicial = 1,
+  ): { sql: string; parametros: unknown[]; siguienteIndice: number } {
+    const condiciones: string[] = [];
+    const parametros: unknown[] = [];
+    let indice = indiceInicial;
+
+    if (desde) {
+      condiciones.push(`a.fecha_asignacion >= $${indice}`);
+      parametros.push(desde);
+      indice++;
+    }
+    if (hasta) {
+      condiciones.push(`a.fecha_asignacion <= $${indice}`);
+      parametros.push(hasta);
+      indice++;
+    }
+
+    const sql =
+      condiciones.length > 0 ? `AND ${condiciones.join(' AND ')}` : '';
+
+    return { sql, parametros, siguienteIndice: indice };
+  }
+
+  private async contarPuntosRetiro(
+    desde?: string,
+    hasta?: string,
+  ): Promise<number> {
+    return this.crearQueryBasePuntosRetiro(desde, hasta).getCount();
+  }
+
+  private async obtenerDistribucionPuntosPorEstado(
+    desde?: string,
+    hasta?: string,
+  ): Promise<Record<EstadoEjecucionPuntoRutaEnum, number>> {
+    const distribucion = Object.values(EstadoEjecucionPuntoRutaEnum).reduce(
+      (acc, estado) => {
+        acc[estado] = 0;
+        return acc;
+      },
+      {} as Record<EstadoEjecucionPuntoRutaEnum, number>,
+    );
+
+    const filas = await this.crearQueryBasePuntosRetiro(desde, hasta)
+      .select('pre.estado', 'estado')
+      .addSelect('COUNT(pre.id)', 'cantidad')
+      .groupBy('pre.estado')
+      .getRawMany<{ estado: EstadoEjecucionPuntoRutaEnum; cantidad: string }>();
+
+    for (const fila of filas) {
+      distribucion[fila.estado] = Number(fila.cantidad);
+    }
+
+    return distribucion;
+  }
+
+  private async obtenerDistribucionPuntosPorTipo(
+    desde?: string,
+    hasta?: string,
+  ): Promise<Record<TipoPuntoColeccionEnum, number>> {
+    const distribucion = Object.values(TipoPuntoColeccionEnum).reduce(
+      (acc, tipo) => {
+        acc[tipo] = 0;
+        return acc;
+      },
+      {} as Record<TipoPuntoColeccionEnum, number>,
+    );
+
+    const filas = await this.crearQueryBasePuntosRetiro(desde, hasta)
+      .innerJoin('pre.puntoRecoleccion', 'pr')
+      .select('pr.tipo_punto', 'tipoPunto')
+      .addSelect('COUNT(pre.id)', 'cantidad')
+      .groupBy('pr.tipo_punto')
+      .getRawMany<{ tipoPunto: TipoPuntoColeccionEnum; cantidad: string }>();
+
+    for (const fila of filas) {
+      distribucion[fila.tipoPunto] = Number(fila.cantidad);
+    }
+
+    return distribucion;
+  }
+
+  private async obtenerMetricasPuntosPorZona(
+    desde?: string,
+    hasta?: string,
+  ): Promise<
+    Array<{
+      zonaId: string;
+      zonaNombre: string;
+      total: number;
+      atendidos: number;
+      porcentajeAtendidos: number | null;
+    }>
+  > {
+    const { sql, parametros } = this.construirFiltroFechaAsignacionSql(
+      desde,
+      hasta,
+    );
+
+    const filas = await this.puntoRutaEjecucionRepository.query(
+      `
+      SELECT
+        z.id AS zona_id,
+        z.nombre AS zona_nombre,
+        COUNT(pre.id)::int AS total,
+        COUNT(*) FILTER (WHERE pre.estado = 'COMPLETADO')::int AS atendidos
+      FROM punto_ruta_ejecucion pre
+      INNER JOIN ejecucion_rutas e ON e.id = pre.ejecucion_ruta_id
+      INNER JOIN asignacion_rutas a ON a.id = e.asignacion_ruta_id
+      INNER JOIN puntos_recoleccion pr ON pr.id = pre.punto_recoleccion_id
+      INNER JOIN zonas z ON z.id = pr.zona_id
+      WHERE 1 = 1
+        ${sql}
+      GROUP BY z.id, z.nombre
+      ORDER BY total DESC
+      `,
+      parametros,
+    );
+
+    return filas.map(
+      (fila: {
+        zona_id: string;
+        zona_nombre: string;
+        total: number;
+        atendidos: number;
+      }) => ({
+        zonaId: fila.zona_id,
+        zonaNombre: fila.zona_nombre,
+        total: Number(fila.total),
+        atendidos: Number(fila.atendidos),
+        porcentajeAtendidos: this.calcularPorcentaje(
+          Number(fila.atendidos),
+          Number(fila.total),
+        ),
+      }),
+    );
+  }
+
+  private async obtenerPorcentajeAtendidosPorRuta(
+    desde?: string,
+    hasta?: string,
+  ): Promise<
+    Array<{
+      rutaId: string;
+      rutaNombre: string;
+      total: number;
+      atendidos: number;
+      porcentajeAtendidos: number | null;
+    }>
+  > {
+    const { sql, parametros } = this.construirFiltroFechaAsignacionSql(
+      desde,
+      hasta,
+    );
+
+    const filas = await this.puntoRutaEjecucionRepository.query(
+      `
+      SELECT
+        r.id AS ruta_id,
+        r.nombre AS ruta_nombre,
+        COUNT(pre.id)::int AS total,
+        COUNT(*) FILTER (WHERE pre.estado = 'COMPLETADO')::int AS atendidos
+      FROM punto_ruta_ejecucion pre
+      INNER JOIN ejecucion_rutas e ON e.id = pre.ejecucion_ruta_id
+      INNER JOIN asignacion_rutas a ON a.id = e.asignacion_ruta_id
+      INNER JOIN rutas r ON r.id = a.ruta_id
+      WHERE 1 = 1
+        ${sql}
+      GROUP BY r.id, r.nombre
+      ORDER BY total DESC
+      `,
+      parametros,
+    );
+
+    return filas
+      .map(
+        (fila: {
+          ruta_id: string;
+          ruta_nombre: string;
+          total: number;
+          atendidos: number;
+        }) => ({
+          rutaId: fila.ruta_id,
+          rutaNombre: fila.ruta_nombre,
+          total: Number(fila.total),
+          atendidos: Number(fila.atendidos),
+          porcentajeAtendidos: this.calcularPorcentaje(
+            Number(fila.atendidos),
+            Number(fila.total),
+          ),
+        }),
+      )
+      .sort(
+        (a, b) =>
+          (a.porcentajeAtendidos ?? 0) - (b.porcentajeAtendidos ?? 0) ||
+          b.total - a.total,
+      );
+  }
+
+  private async obtenerPuntosConMasProblemas(
+    desde?: string,
+    hasta?: string,
+  ): Promise<
+    Array<{
+      puntoRecoleccionId: string;
+      puntoNombre: string;
+      totalIncidencias: number;
+      vecesFallido: number;
+      vecesSaltado: number;
+      indiceProblemas: number;
+    }>
+  > {
+    const { sql, parametros } = this.construirFiltroFechaAsignacionSql(
+      desde,
+      hasta,
+    );
+
+    const filas = await this.puntoRutaEjecucionRepository.query(
+      `
+      SELECT
+        pr.id AS punto_id,
+        pr.nombre AS punto_nombre,
+        COUNT(DISTINCT i.id)::int AS total_incidencias,
+        COUNT(*) FILTER (WHERE pre.estado = 'FALLIDO')::int AS veces_fallido,
+        COUNT(*) FILTER (WHERE pre.estado = 'SALTADO')::int AS veces_saltado,
+        (
+          COUNT(DISTINCT i.id)
+          + COUNT(*) FILTER (WHERE pre.estado = 'FALLIDO')
+          + COUNT(*) FILTER (WHERE pre.estado = 'SALTADO')
+        )::int AS indice_problemas
+      FROM punto_ruta_ejecucion pre
+      INNER JOIN ejecucion_rutas e ON e.id = pre.ejecucion_ruta_id
+      INNER JOIN asignacion_rutas a ON a.id = e.asignacion_ruta_id
+      INNER JOIN puntos_recoleccion pr ON pr.id = pre.punto_recoleccion_id
+      LEFT JOIN incidencias i ON i.punto_ejecucion_ruta_id = pre.id
+      WHERE 1 = 1
+        ${sql}
+      GROUP BY pr.id, pr.nombre
+      HAVING (
+        COUNT(DISTINCT i.id)
+        + COUNT(*) FILTER (WHERE pre.estado = 'FALLIDO')
+        + COUNT(*) FILTER (WHERE pre.estado = 'SALTADO')
+      ) > 0
+      ORDER BY indice_problemas DESC, total_incidencias DESC
+      LIMIT 10
+      `,
+      parametros,
+    );
+
+    return filas.map(
+      (fila: {
+        punto_id: string;
+        punto_nombre: string;
+        total_incidencias: number;
+        veces_fallido: number;
+        veces_saltado: number;
+        indice_problemas: number;
+      }) => ({
+        puntoRecoleccionId: fila.punto_id,
+        puntoNombre: fila.punto_nombre,
+        totalIncidencias: Number(fila.total_incidencias),
+        vecesFallido: Number(fila.veces_fallido),
+        vecesSaltado: Number(fila.veces_saltado),
+        indiceProblemas: Number(fila.indice_problemas),
+      }),
+    );
+  }
+
+  private async obtenerPuntosAtendidosDiarios(
+    desde?: string,
+    hasta?: string,
+  ): Promise<Array<{ fecha: string; cantidad: number }>> {
+    const filas = await this.crearQueryBasePuntosRetiro(desde, hasta)
+      .andWhere('pre.estado = :completado', {
+        completado: EstadoEjecucionPuntoRutaEnum.COMPLETADO,
+      })
+      .andWhere('pre.tiempo_chequeo IS NOT NULL')
+      .select('DATE(pre.tiempo_chequeo)', 'fecha')
+      .addSelect('COUNT(pre.id)', 'cantidad')
+      .groupBy('DATE(pre.tiempo_chequeo)')
+      .orderBy('DATE(pre.tiempo_chequeo)', 'ASC')
+      .getRawMany<{ fecha: string; cantidad: string }>();
+
+    return filas.map((fila) => ({
+      fecha: fila.fecha,
+      cantidad: Number(fila.cantidad),
+    }));
+  }
+
+  private async obtenerBacklogPuntosRetiro(): Promise<{
+    porAtenderEnEjecucionesActivas: number;
+    porAtenderEnEjecucionesParciales: number;
+  }> {
+    const [fila] = await this.puntoRutaEjecucionRepository.query(`
+      SELECT
+        COUNT(*) FILTER (
+          WHERE pre.estado = 'PENDIENTE'
+            AND e.estado = 'EN_PROGRESO'
+        )::int AS por_atender_activas,
+        COUNT(*) FILTER (
+          WHERE pre.estado = 'PENDIENTE'
+            AND e.estado = 'PARCIAL'
+        )::int AS por_atender_parciales
+      FROM punto_ruta_ejecucion pre
+      INNER JOIN ejecucion_rutas e ON e.id = pre.ejecucion_ruta_id
+    `);
+
+    return {
+      porAtenderEnEjecucionesActivas: Number(fila?.por_atender_activas ?? 0),
+      porAtenderEnEjecucionesParciales: Number(
+        fila?.por_atender_parciales ?? 0,
+      ),
+    };
   }
 
   private crearQueryBaseIncidencias(
