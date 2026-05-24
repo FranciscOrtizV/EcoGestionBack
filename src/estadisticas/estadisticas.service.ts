@@ -1,9 +1,14 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
-import { EjecucionRuta } from 'src/common/entities';
-import { EstadoEjecucionRutaEnum } from 'src/common/enums';
+import { EjecucionRuta, Incidencia } from 'src/common/entities';
+import {
+  EstadoEjecucionRutaEnum,
+  EstadoIncidenciaEnum,
+  PrioridadIncidenciaEnum,
+} from 'src/common/enums';
 import { buildResponse } from 'src/common/helpers';
+import { FiltroMetricasIncidenciasDto } from './dto/filtro-metricas-incidencias.dto';
 import { FiltroMetricasRutasDto } from './dto/filtro-metricas-rutas.dto';
 
 const MARGEN_MINUTOS_A_TIEMPO_DEFAULT = 15;
@@ -13,6 +18,9 @@ export class EstadisticasService {
   constructor(
     @InjectRepository(EjecucionRuta)
     private readonly ejecucionRutaRepository: Repository<EjecucionRuta>,
+
+    @InjectRepository(Incidencia)
+    private readonly incidenciaRepository: Repository<Incidencia>,
   ) {}
 
   async obtenerMetricasRutas(filtro: FiltroMetricasRutasDto = {}) {
@@ -32,7 +40,7 @@ export class EstadisticasService {
       this.obtenerDistribucionPorEstado(desde, hasta),
       this.obtenerRutasDiariasEjecutadas(desde, hasta),
       this.obtenerMetricasTiempo(desde, hasta, margenMinutosATiempo),
-      this.obtenerMetricasIncidencias(desde, hasta),
+      this.obtenerIncidenciasPorEjecucion(desde, hasta),
       this.obtenerMetricasKilometros(desde, hasta),
     ]);
 
@@ -70,6 +78,69 @@ export class EstadisticasService {
     );
   }
 
+  async obtenerMetricasIncidencias(filtro: FiltroMetricasIncidenciasDto = {}) {
+    const { desde, hasta } = filtro;
+
+    const [
+      totalIncidencias,
+      distribucionPorEstado,
+      distribucionPorPrioridad,
+      porTipo,
+      porZona,
+      incidenciasDiariasReportadas,
+      metricasResolucion,
+      distribucionPorContexto,
+      backlogActual,
+    ] = await Promise.all([
+      this.contarIncidencias(desde, hasta),
+      this.obtenerDistribucionIncidenciasPorEstado(desde, hasta),
+      this.obtenerDistribucionIncidenciasPorPrioridad(desde, hasta),
+      this.obtenerIncidenciasPorTipo(desde, hasta),
+      this.obtenerIncidenciasPorZona(desde, hasta),
+      this.obtenerIncidenciasDiariasReportadas(desde, hasta),
+      this.obtenerMetricasResolucionIncidencias(desde, hasta),
+      this.obtenerDistribucionContextoIncidencias(desde, hasta),
+      this.obtenerBacklogIncidencias(),
+    ]);
+
+    const porAtender =
+      distribucionPorEstado[EstadoIncidenciaEnum.ABIERTA] +
+      distribucionPorEstado[EstadoIncidenciaEnum.EN_PROGRESO];
+
+    const atendidas =
+      distribucionPorEstado[EstadoIncidenciaEnum.RESUELTA] +
+      distribucionPorEstado[EstadoIncidenciaEnum.CERRADA];
+
+    const data = {
+      periodo: { desde: desde ?? null, hasta: hasta ?? null },
+      resumen: {
+        totalIncidencias,
+        porAtender,
+        atendidas,
+        porcentajeAtendidas: this.calcularPorcentaje(atendidas, totalIncidencias),
+        porcentajePorAtender: this.calcularPorcentaje(
+          porAtender,
+          totalIncidencias,
+        ),
+        tiempoPromedioResolucionMinutos: metricasResolucion.promedioMinutos,
+        totalConResolucionRegistrada: metricasResolucion.totalConResolucion,
+      },
+      backlogActual,
+      distribucionPorEstado,
+      distribucionPorPrioridad,
+      porTipo,
+      porZona,
+      distribucionPorContexto,
+      incidenciasDiariasReportadas,
+    };
+
+    return buildResponse(
+      HttpStatus.OK,
+      'Métricas de incidencias obtenidas correctamente',
+      data,
+    );
+  }
+
   private crearQueryBase(
     desde?: string,
     hasta?: string,
@@ -80,6 +151,249 @@ export class EstadisticasService {
 
     this.aplicarFiltroFecha(qb, desde, hasta);
     return qb;
+  }
+
+  private crearQueryBaseIncidencias(
+    desde?: string,
+    hasta?: string,
+  ): SelectQueryBuilder<Incidencia> {
+    const qb = this.incidenciaRepository.createQueryBuilder('i');
+    this.aplicarFiltroFechaReporte(qb, desde, hasta);
+    return qb;
+  }
+
+  private aplicarFiltroFechaReporte(
+    qb: SelectQueryBuilder<Incidencia>,
+    desde?: string,
+    hasta?: string,
+  ): void {
+    if (desde) {
+      qb.andWhere('DATE(i.reported_at) >= :desde', { desde });
+    }
+    if (hasta) {
+      qb.andWhere('DATE(i.reported_at) <= :hasta', { hasta });
+    }
+  }
+
+  private async contarIncidencias(
+    desde?: string,
+    hasta?: string,
+  ): Promise<number> {
+    return this.crearQueryBaseIncidencias(desde, hasta).getCount();
+  }
+
+  private async obtenerDistribucionIncidenciasPorEstado(
+    desde?: string,
+    hasta?: string,
+  ): Promise<Record<EstadoIncidenciaEnum, number>> {
+    const distribucion = Object.values(EstadoIncidenciaEnum).reduce(
+      (acc, estado) => {
+        acc[estado] = 0;
+        return acc;
+      },
+      {} as Record<EstadoIncidenciaEnum, number>,
+    );
+
+    const filas = await this.crearQueryBaseIncidencias(desde, hasta)
+      .select('i.estado', 'estado')
+      .addSelect('COUNT(i.id)', 'cantidad')
+      .groupBy('i.estado')
+      .getRawMany<{ estado: EstadoIncidenciaEnum; cantidad: string }>();
+
+    for (const fila of filas) {
+      distribucion[fila.estado] = Number(fila.cantidad);
+    }
+
+    return distribucion;
+  }
+
+  private async obtenerDistribucionIncidenciasPorPrioridad(
+    desde?: string,
+    hasta?: string,
+  ): Promise<Record<PrioridadIncidenciaEnum, number>> {
+    const distribucion = Object.values(PrioridadIncidenciaEnum).reduce(
+      (acc, prioridad) => {
+        acc[prioridad] = 0;
+        return acc;
+      },
+      {} as Record<PrioridadIncidenciaEnum, number>,
+    );
+
+    const filas = await this.crearQueryBaseIncidencias(desde, hasta)
+      .select('i.prioridad', 'prioridad')
+      .addSelect('COUNT(i.id)', 'cantidad')
+      .groupBy('i.prioridad')
+      .getRawMany<{ prioridad: PrioridadIncidenciaEnum; cantidad: string }>();
+
+    for (const fila of filas) {
+      distribucion[fila.prioridad] = Number(fila.cantidad);
+    }
+
+    return distribucion;
+  }
+
+  private async obtenerIncidenciasPorTipo(
+    desde?: string,
+    hasta?: string,
+  ): Promise<
+    Array<{ tipoId: string; tipoNombre: string; cantidad: number }>
+  > {
+    const filas = await this.crearQueryBaseIncidencias(desde, hasta)
+      .innerJoin('i.tipoIncidencia', 't')
+      .select('t.id', 'tipoId')
+      .addSelect('t.nombre', 'tipoNombre')
+      .addSelect('COUNT(i.id)', 'cantidad')
+      .groupBy('t.id')
+      .addGroupBy('t.nombre')
+      .orderBy('cantidad', 'DESC')
+      .getRawMany<{ tipoId: string; tipoNombre: string; cantidad: string }>();
+
+    return filas.map((fila) => ({
+      tipoId: fila.tipoId,
+      tipoNombre: fila.tipoNombre,
+      cantidad: Number(fila.cantidad),
+    }));
+  }
+
+  private async obtenerIncidenciasPorZona(
+    desde?: string,
+    hasta?: string,
+  ): Promise<Array<{ zonaId: string; zonaNombre: string; cantidad: number }>> {
+    const filas = await this.crearQueryBaseIncidencias(desde, hasta)
+      .innerJoin('i.puntoEjecucionRuta', 'pre')
+      .innerJoin('pre.puntoRecoleccion', 'pr')
+      .innerJoin('pr.zona', 'z')
+      .select('z.id', 'zonaId')
+      .addSelect('z.nombre', 'zonaNombre')
+      .addSelect('COUNT(i.id)', 'cantidad')
+      .groupBy('z.id')
+      .addGroupBy('z.nombre')
+      .orderBy('cantidad', 'DESC')
+      .getRawMany<{ zonaId: string; zonaNombre: string; cantidad: string }>();
+
+    return filas.map((fila) => ({
+      zonaId: fila.zonaId,
+      zonaNombre: fila.zonaNombre,
+      cantidad: Number(fila.cantidad),
+    }));
+  }
+
+  private async obtenerIncidenciasDiariasReportadas(
+    desde?: string,
+    hasta?: string,
+  ): Promise<Array<{ fecha: string; cantidad: number }>> {
+    const filas = await this.crearQueryBaseIncidencias(desde, hasta)
+      .select('DATE(i.reported_at)', 'fecha')
+      .addSelect('COUNT(i.id)', 'cantidad')
+      .groupBy('DATE(i.reported_at)')
+      .orderBy('DATE(i.reported_at)', 'ASC')
+      .getRawMany<{ fecha: string; cantidad: string }>();
+
+    return filas.map((fila) => ({
+      fecha: fila.fecha,
+      cantidad: Number(fila.cantidad),
+    }));
+  }
+
+  private async obtenerMetricasResolucionIncidencias(
+    desde?: string,
+    hasta?: string,
+  ): Promise<{ promedioMinutos: number | null; totalConResolucion: number }> {
+    const condicionesFecha: string[] = [];
+    const parametros: unknown[] = [];
+    let indice = 1;
+
+    if (desde) {
+      condicionesFecha.push(`DATE(i.reported_at) >= $${indice}`);
+      parametros.push(desde);
+      indice++;
+    }
+    if (hasta) {
+      condicionesFecha.push(`DATE(i.reported_at) <= $${indice}`);
+      parametros.push(hasta);
+      indice++;
+    }
+
+    const filtroFecha =
+      condicionesFecha.length > 0
+        ? `AND ${condicionesFecha.join(' AND ')}`
+        : '';
+
+    const [fila] = await this.incidenciaRepository.query(
+      `
+      SELECT
+        COUNT(*)::int AS total_con_resolucion,
+        ROUND(
+          AVG(
+            EXTRACT(EPOCH FROM (i.resolved_at - i.reported_at)) / 60.0
+          )::numeric,
+          2
+        ) AS promedio_minutos
+      FROM incidencias i
+      WHERE i.resolved_at IS NOT NULL
+        AND i.estado IN ('RESUELTA', 'CERRADA')
+        ${filtroFecha}
+      `,
+      parametros,
+    );
+
+    const totalConResolucion = Number(fila?.total_con_resolucion ?? 0);
+    const promedioMinutos =
+      fila?.promedio_minutos != null ? Number(fila.promedio_minutos) : null;
+
+    return { promedioMinutos, totalConResolucion };
+  }
+
+  private async obtenerDistribucionContextoIncidencias(
+    desde?: string,
+    hasta?: string,
+  ): Promise<{
+    vinculadasAEjecucionRuta: number;
+    vinculadasAPunto: number;
+  }> {
+    const fila = await this.crearQueryBaseIncidencias(desde, hasta)
+      .select(
+        `COUNT(i.id) FILTER (WHERE i.ejecucion_ruta_id IS NOT NULL)`,
+        'vinculadasAEjecucionRuta',
+      )
+      .addSelect(
+        `COUNT(i.id) FILTER (WHERE i.punto_ejecucion_ruta_id IS NOT NULL)`,
+        'vinculadasAPunto',
+      )
+      .getRawOne<{
+        vinculadasAEjecucionRuta: string;
+        vinculadasAPunto: string;
+      }>();
+
+    return {
+      vinculadasAEjecucionRuta: Number(fila?.vinculadasAEjecucionRuta ?? 0),
+      vinculadasAPunto: Number(fila?.vinculadasAPunto ?? 0),
+    };
+  }
+
+  private async obtenerBacklogIncidencias(): Promise<{
+    porAtender: number;
+    masDe24Horas: number;
+    masDe72Horas: number;
+  }> {
+    const [fila] = await this.incidenciaRepository.query(`
+      SELECT
+        COUNT(*)::int AS por_atender,
+        COUNT(*) FILTER (
+          WHERE i.reported_at < NOW() - INTERVAL '24 hours'
+        )::int AS mas_de_24_horas,
+        COUNT(*) FILTER (
+          WHERE i.reported_at < NOW() - INTERVAL '72 hours'
+        )::int AS mas_de_72_horas
+      FROM incidencias i
+      WHERE i.estado IN ('ABIERTA', 'EN_PROGRESO')
+    `);
+
+    return {
+      porAtender: Number(fila?.por_atender ?? 0),
+      masDe24Horas: Number(fila?.mas_de_24_horas ?? 0),
+      masDe72Horas: Number(fila?.mas_de_72_horas ?? 0),
+    };
   }
 
   private aplicarFiltroFecha(
@@ -204,7 +518,7 @@ export class EstadisticasService {
     };
   }
 
-  private async obtenerMetricasIncidencias(
+  private async obtenerIncidenciasPorEjecucion(
     desde?: string,
     hasta?: string,
   ): Promise<{ total: number; conIncidencias: number }> {
