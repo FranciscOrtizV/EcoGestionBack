@@ -7,14 +7,16 @@ import {
   EjecucionRuta,
   Evidencia,
   Incidencia,
+  TipoIncidencia,
   PuntoRuta,
   PuntoRutaEjecucion,
   Ruta,
   Usuario,
   Vehiculo,
 } from 'src/common/entities';
-import { EjecucionRutasService } from './ejecucion_rutas.service';
+import { ArchivosService } from './archivos.service';
 import { EjecucionRutasController } from './ejecucion_rutas.controller';
+import { EjecucionRutasService } from './ejecucion_rutas.service';
 
 
 @Module({
@@ -29,11 +31,12 @@ import { EjecucionRutasController } from './ejecucion_rutas.controller';
       PuntoRuta,
       PuntoRutaEjecucion,
       Evidencia,
-      Incidencia
+      Incidencia,
+      TipoIncidencia,
     ]),
     AuthModule,
   ],
   controllers: [EjecucionRutasController],
-  providers: [EjecucionRutasService],
+  providers: [EjecucionRutasService, ArchivosService],
 })
 export class EjecucionRutasModule {}

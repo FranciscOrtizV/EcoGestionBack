@@ -49,6 +49,9 @@ lerna-debug.log*
 .temp
 .tmp
 
+# Archivos subidos por la API
+/uploads
+
 # Runtime data
 pids
 *.pid

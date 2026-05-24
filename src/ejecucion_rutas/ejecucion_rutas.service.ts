@@ -10,19 +10,25 @@ import {
   AsignacionRuta,
   EjecucionRuta,
   Evidencia,
+  Incidencia,
   PuntoRutaEjecucion,
+  TipoIncidencia,
   Usuario,
 } from 'src/common/entities';
 import {
   EstadoAsignacionRutaEnum,
   EstadoEjecucionPuntoRutaEnum,
   EstadoEjecucionRutaEnum,
+  EstadoIncidenciaEnum,
   RolesValidosEnum,
   TipoPuntoColeccionEnum,
   TurnoEnum,
 } from 'src/common/enums';
 import { buildResponse } from 'src/common/helpers';
+import { ArchivosService } from './archivos.service';
+import { ActualizarEstadoPuntoEjecucionDto } from './dto/actualizar-estado-punto-ejecucion.dto';
 import { IniciarEjecucionRutaDto } from './dto/iniciar-ejecucion-ruta.dto';
+import { RegistrarIncidenciaDto } from './dto/registrar-incidencia.dto';
 
 const ESTADOS_ASIGNACION_NO_INICIABLES = new Set<EstadoAsignacionRutaEnum>([
   EstadoAsignacionRutaEnum.COMPLETADO,
@@ -88,7 +94,10 @@ export class EjecucionRutasService {
     private readonly puntoRutaEjecucionRepo: Repository<PuntoRutaEjecucion>,
     @InjectRepository(Evidencia)
     private readonly evidenciaRepo: Repository<Evidencia>,
+    @InjectRepository(TipoIncidencia)
+    private readonly tipoIncidenciaRepo: Repository<TipoIncidencia>,
     private readonly dataSource: DataSource,
+    private readonly archivosService: ArchivosService,
   ) {}
 
   private formatearTiempoTranscurrido(
@@ -233,6 +242,234 @@ export class EjecucionRutasService {
     if (esConductor && user.id === asignacion.conductor.id) return;
 
     throw new ForbiddenException('No tiene permiso para iniciar esta ejecución de ruta.');
+  }
+
+  async actualizarEstadoPunto(
+    dto: ActualizarEstadoPuntoEjecucionDto,
+    fotografia: Express.Multer.File | undefined,
+    user: Usuario,
+  ) {
+    const punto = await this.puntoRutaEjecucionRepo.findOne({
+      where: { id: dto.puntoRutaEjecucionId },
+      relations: {
+        ejecucionRuta: { asignacionRuta: { conductor: true } },
+      },
+    });
+
+    if (!punto) {
+      throw new NotFoundException(
+        `No se encontró un punto de ejecución con id: ${dto.puntoRutaEjecucionId}`,
+      );
+    }
+
+    const ejecucion = punto.ejecucionRuta;
+
+    if (!ejecucion?.tiempoInicio) {
+      return buildResponse(
+        HttpStatus.CONFLICT,
+        'La ejecución de ruta aún no ha sido iniciada.',
+      );
+    }
+
+    if (ESTADOS_EJECUCION_NO_INICIABLES.has(ejecucion.estado)) {
+      return buildResponse(
+        HttpStatus.CONFLICT,
+        'No se puede actualizar un punto de una ejecución completada o cancelada.',
+      );
+    }
+
+    this.assertUsuarioPuedeIniciar(user, ejecucion.asignacionRuta);
+
+    const ahora = new Date();
+    let rutaArchivoGuardado: string | null = null;
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      punto.estado = dto.estado;
+      punto.tiempoChequeo = ahora;
+      punto.updatedAt = ahora;
+
+      if (dto.comentarios != null && dto.comentarios.trim() !== '') {
+        punto.comentarios = dto.comentarios.trim();
+      }
+
+      await queryRunner.manager.save(punto);
+
+      let evidenciaCreada: EvidenciaPuntoItemDto | null = null;
+
+      if (fotografia) {
+        const archivo = await this.archivosService.guardarEvidencia(fotografia);
+        rutaArchivoGuardado = archivo.rutaAbsoluta;
+
+        const evidencia = queryRunner.manager.create(Evidencia, {
+          puntoEjecucionRuta: { id: punto.id },
+          subidoPorUsuario: { id: user.id },
+          fileUrl: archivo.fileUrl,
+          fileName: archivo.fileName,
+          mimeType: archivo.mimeType,
+          fileSizeBytes: String(archivo.fileSizeBytes),
+          latitud: punto.latitud != null ? Number(punto.latitud) : undefined,
+          longitud: punto.longitud != null ? Number(punto.longitud) : undefined,
+          takenAt: ahora,
+        });
+
+        const evidenciaGuardada = await queryRunner.manager.save(evidencia);
+        evidenciaCreada = this.mapEvidenciaToDto(evidenciaGuardada);
+      }
+
+      await queryRunner.commitTransaction();
+      await queryRunner.release();
+
+      return buildResponse(
+        HttpStatus.OK,
+        'Estado del punto actualizado correctamente.',
+        {
+          id: punto.id,
+          estado: punto.estado,
+          tiempoChequeo: punto.tiempoChequeo,
+          comentarios: punto.comentarios ?? null,
+          evidencia: evidenciaCreada,
+        },
+      );
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      await queryRunner.release();
+
+      if (rutaArchivoGuardado) {
+        await this.archivosService.eliminarPorRutaAbsoluta(rutaArchivoGuardado);
+      }
+
+      throw error;
+    }
+  }
+
+  async registrarIncidencia(
+    dto: RegistrarIncidenciaDto,
+    fotografia: Express.Multer.File | undefined,
+    user: Usuario,
+  ) {
+    const punto = await this.puntoRutaEjecucionRepo.findOne({
+      where: { id: dto.puntoRutaEjecucionId },
+      relations: {
+        ejecucionRuta: { asignacionRuta: { conductor: true } },
+      },
+    });
+
+    if (!punto) {
+      throw new NotFoundException(
+        `No se encontró un punto de ejecución con id: ${dto.puntoRutaEjecucionId}`,
+      );
+    }
+
+    const ejecucion = punto.ejecucionRuta;
+
+    if (!ejecucion?.tiempoInicio) {
+      return buildResponse(
+        HttpStatus.CONFLICT,
+        'La ejecución de ruta aún no ha sido iniciada.',
+      );
+    }
+
+    if (ESTADOS_EJECUCION_NO_INICIABLES.has(ejecucion.estado)) {
+      return buildResponse(
+        HttpStatus.CONFLICT,
+        'No se puede registrar una incidencia en una ejecución completada o cancelada.',
+      );
+    }
+
+    this.assertUsuarioPuedeIniciar(user, ejecucion.asignacionRuta);
+
+    const tipoIncidencia = await this.tipoIncidenciaRepo.findOne({
+      where: { id: dto.tipoIncidenciaId },
+    });
+
+    if (!tipoIncidencia) {
+      throw new NotFoundException(
+        `No se encontró un tipo de incidencia con id: ${dto.tipoIncidenciaId}`,
+      );
+    }
+
+    const ahora = new Date();
+    let rutaArchivoGuardado: string | null = null;
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const descripcion = dto.descripcion?.trim();
+
+      const incidencia = queryRunner.manager.create(Incidencia, {
+        tipoIncidencia: { id: dto.tipoIncidenciaId },
+        ejecucionRuta: { id: ejecucion.id },
+        puntoEjecucionRuta: { id: punto.id },
+        reportadoPorUsuario: { id: user.id },
+        titulo: dto.titulo.trim(),
+        descripcion: descripcion || undefined,
+        estado: EstadoIncidenciaEnum.ABIERTA,
+        prioridad: dto.prioridad,
+        latitud: dto.latitud,
+        longitud: dto.longitud,
+        reportedAt: ahora,
+      });
+
+      const incidenciaGuardada = await queryRunner.manager.save(incidencia);
+
+      let evidenciaCreada: EvidenciaPuntoItemDto | null = null;
+
+      if (fotografia) {
+        const archivo = await this.archivosService.guardarEvidencia(fotografia);
+        rutaArchivoGuardado = archivo.rutaAbsoluta;
+
+        const evidencia = queryRunner.manager.create(Evidencia, {
+          incidencia: { id: incidenciaGuardada.id },
+          subidoPorUsuario: { id: user.id },
+          fileUrl: archivo.fileUrl,
+          fileName: archivo.fileName,
+          mimeType: archivo.mimeType,
+          fileSizeBytes: String(archivo.fileSizeBytes),
+          latitud: dto.latitud,
+          longitud: dto.longitud,
+          takenAt: ahora,
+        });
+
+        const evidenciaGuardada = await queryRunner.manager.save(evidencia);
+        evidenciaCreada = this.mapEvidenciaToDto(evidenciaGuardada);
+      }
+
+      await queryRunner.commitTransaction();
+      await queryRunner.release();
+
+      return buildResponse(
+        HttpStatus.CREATED,
+        'Incidencia registrada correctamente.',
+        {
+          id: incidenciaGuardada.id,
+          titulo: incidenciaGuardada.titulo,
+          descripcion: incidenciaGuardada.descripcion ?? null,
+          estado: incidenciaGuardada.estado,
+          prioridad: incidenciaGuardada.prioridad,
+          latitud: dto.latitud,
+          longitud: dto.longitud,
+          reportedAt: incidenciaGuardada.reportedAt,
+          puntoRutaEjecucionId: punto.id,
+          tipoIncidenciaId: dto.tipoIncidenciaId,
+          evidencia: evidenciaCreada,
+        },
+      );
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      await queryRunner.release();
+
+      if (rutaArchivoGuardado) {
+        await this.archivosService.eliminarPorRutaAbsoluta(rutaArchivoGuardado);
+      }
+
+      throw error;
+    }
   }
 
   async getResumenPorId(ejecucionRutaId: string): Promise<ResumenEjecucionRutaDto> {
