@@ -11,6 +11,7 @@ import { PuntosRecoleccionModule } from './puntos_recoleccion/puntos-recoleccion
 import { RutasModule } from './rutas/rutas.module';
 import { AsignacionRutasModule } from './asignacion_rutas/asignacion-rutas.module';
 import { EjecucionRutasModule } from './ejecucion_rutas/ejecucion_rutas.module';
+import { IncidenciasModule } from './incidencias/incidencias.module';
 
 
 @Module({
@@ -36,6 +37,7 @@ import { EjecucionRutasModule } from './ejecucion_rutas/ejecucion_rutas.module';
     RutasModule,
     AsignacionRutasModule,
     EjecucionRutasModule,
+    IncidenciasModule,
   ],
 })
 export class AppModule {}
