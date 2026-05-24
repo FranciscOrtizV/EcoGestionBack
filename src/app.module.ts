@@ -12,6 +12,7 @@ import { RutasModule } from './rutas/rutas.module';
 import { AsignacionRutasModule } from './asignacion_rutas/asignacion-rutas.module';
 import { EjecucionRutasModule } from './ejecucion_rutas/ejecucion_rutas.module';
 import { IncidenciasModule } from './incidencias/incidencias.module';
+import { EstadisticasModule } from './estadisticas/estadisticas.module';
 
 
 @Module({
@@ -38,6 +39,7 @@ import { IncidenciasModule } from './incidencias/incidencias.module';
     AsignacionRutasModule,
     EjecucionRutasModule,
     IncidenciasModule,
+    EstadisticasModule,
   ],
 })
 export class AppModule {}
