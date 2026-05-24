@@ -73,6 +73,8 @@ export type ResumenEjecucionRutaDto = {
   turno: TurnoEnum;
   planificacionTiempoInicio: Date | null;
   planificacionTiempoFin: Date | null;
+  tiempoInicio: Date | null;
+  tiempoTranscurrido: string | null;
 };
 
 @Injectable()
@@ -80,12 +82,34 @@ export class EjecucionRutasService {
   constructor(
     @InjectRepository(EjecucionRuta)
     private readonly ejecucionRutaRepo: Repository<EjecucionRuta>,
+    @InjectRepository(AsignacionRuta)
+    private readonly asignacionRutaRepo: Repository<AsignacionRuta>,
     @InjectRepository(PuntoRutaEjecucion)
     private readonly puntoRutaEjecucionRepo: Repository<PuntoRutaEjecucion>,
     @InjectRepository(Evidencia)
     private readonly evidenciaRepo: Repository<Evidencia>,
     private readonly dataSource: DataSource,
   ) {}
+
+  private formatearTiempoTranscurrido(
+    tiempoInicio?: Date,
+    tiempoFin?: Date,
+  ): string | null {
+    if (!tiempoInicio) return null;
+
+    const referenciaFin = tiempoFin ?? new Date();
+    const totalSegundos = Math.max(
+      0,
+      Math.floor((referenciaFin.getTime() - tiempoInicio.getTime()) / 1000),
+    );
+
+    const horas = Math.floor(totalSegundos / 3600);
+    const minutos = Math.floor((totalSegundos % 3600) / 60);
+    const segundos = totalSegundos % 60;
+    const pad = (valor: number) => String(valor).padStart(2, '0');
+
+    return `${pad(horas)}:${pad(minutos)}:${pad(segundos)}`;
+  }
 
   private mapEvidenciaToDto(evidencia: Evidencia): EvidenciaPuntoItemDto {
     return {
@@ -208,9 +232,7 @@ export class EjecucionRutasService {
 
     if (esConductor && user.id === asignacion.conductor.id) return;
 
-    throw new ForbiddenException(
-      'No tiene permiso para iniciar esta ejecución de ruta.',
-    );
+    throw new ForbiddenException('No tiene permiso para iniciar esta ejecución de ruta.');
   }
 
   async getResumenPorId(ejecucionRutaId: string): Promise<ResumenEjecucionRutaDto> {
@@ -254,6 +276,11 @@ export class EjecucionRutasService {
       turno,
       planificacionTiempoInicio: planificacionTiempoInicio ?? null,
       planificacionTiempoFin: planificacionTiempoFin ?? null,
+      tiempoInicio: ejecucion.tiempoInicio ?? null,
+      tiempoTranscurrido: this.formatearTiempoTranscurrido(
+        ejecucion.tiempoInicio,
+        ejecucion.tiempoFin,
+      ),
     };
   }
 
