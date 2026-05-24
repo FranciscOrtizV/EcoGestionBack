@@ -10,6 +10,7 @@ import { ZonasModule } from './zonas/zonas.module';
 import { PuntosRecoleccionModule } from './puntos_recoleccion/puntos-recoleccion.module';
 import { RutasModule } from './rutas/rutas.module';
 import { AsignacionRutasModule } from './asignacion_rutas/asignacion-rutas.module';
+import { EjecucionRutasModule } from './ejecucion_rutas/ejecucion_rutas.module';
 
 
 @Module({
@@ -34,6 +35,7 @@ import { AsignacionRutasModule } from './asignacion_rutas/asignacion-rutas.modul
     PuntosRecoleccionModule,
     RutasModule,
     AsignacionRutasModule,
+    EjecucionRutasModule,
   ],
 })
 export class AppModule {}

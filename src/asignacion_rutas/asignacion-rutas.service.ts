@@ -83,7 +83,7 @@ export class AsignacionRutasService {
 
     if (errTiempos) return errTiempos;
 
-    const ruta = await this.rutaRepository.findOne({ where: { id: dto.rutaId } });
+    const ruta = await this.rutaRepository.findOne({ where: { id: dto.rutaId }, order: { codigo: 'asc' } });
 
     if (!ruta?.isActive)
       return buildResponse(

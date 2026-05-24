@@ -22,6 +22,20 @@ import { UpdateAsignacionRutaDto } from './dto/update-asignacion-ruta.dto';
 export class AsignacionRutasController {
   constructor(private readonly asignacionRutasService: AsignacionRutasService) {}
 
+  @Patch(':id')
+  @Auth(
+    RolesValidosEnum.ADMIN,
+    RolesValidosEnum.PLANIFICADOR,
+    RolesValidosEnum.SUPERVISOR,
+  )
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() updateDto: UpdateAsignacionRutaDto,
+    @GetUser() user: Usuario,
+  ) {
+    return this.asignacionRutasService.update(id, updateDto, user);
+  }
+
   @Post()
   @Auth(
     RolesValidosEnum.ADMIN,
@@ -109,19 +123,5 @@ export class AsignacionRutasController {
     @GetUser() user: Usuario,
   ) {
     return this.asignacionRutasService.publicarAsignacion(id, user);
-  }
-
-  @Patch(':id')
-  @Auth(
-    RolesValidosEnum.ADMIN,
-    RolesValidosEnum.PLANIFICADOR,
-    RolesValidosEnum.SUPERVISOR,
-  )
-  update(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() updateDto: UpdateAsignacionRutaDto,
-    @GetUser() user: Usuario,
-  ) {
-    return this.asignacionRutasService.update(id, updateDto, user);
   }
 }
