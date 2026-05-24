@@ -19,6 +19,7 @@ import { GetUser } from 'src/auth/decorators/get-user.decorator';
 import { Usuario } from 'src/common/entities';
 import { RolesValidosEnum } from 'src/common/enums';
 import { ActualizarEstadoPuntoEjecucionDto } from './dto/actualizar-estado-punto-ejecucion.dto';
+import { FinalizarEjecucionRutaDto } from './dto/finalizar-ejecucion-ruta.dto';
 import { IniciarEjecucionRutaDto } from './dto/iniciar-ejecucion-ruta.dto';
 import { RegistrarIncidenciaDto } from './dto/registrar-incidencia.dto';
 import { EjecucionRutasService } from './ejecucion_rutas.service';
@@ -117,6 +118,21 @@ export class EjecucionRutasController {
     @GetUser() user: Usuario,
   ) {
     return this.ejecucionRutasService.iniciar(id, dto, user);
+  }
+
+  @Patch(':id/finalizar')
+  @Auth(
+    RolesValidosEnum.ADMIN,
+    RolesValidosEnum.PLANIFICADOR,
+    RolesValidosEnum.SUPERVISOR,
+    RolesValidosEnum.CONDUCTOR,
+  )
+  finalizar(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: FinalizarEjecucionRutaDto,
+    @GetUser() user: Usuario,
+  ) {
+    return this.ejecucionRutasService.finalizar(id, dto, user);
   }
 
   @Get(':id/resumen')

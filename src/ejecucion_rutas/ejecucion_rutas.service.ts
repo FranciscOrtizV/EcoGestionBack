@@ -27,6 +27,7 @@ import {
 import { buildResponse } from 'src/common/helpers';
 import { ArchivosService } from './archivos.service';
 import { ActualizarEstadoPuntoEjecucionDto } from './dto/actualizar-estado-punto-ejecucion.dto';
+import { FinalizarEjecucionRutaDto } from './dto/finalizar-ejecucion-ruta.dto';
 import { IniciarEjecucionRutaDto } from './dto/iniciar-ejecucion-ruta.dto';
 import { RegistrarIncidenciaDto } from './dto/registrar-incidencia.dto';
 
@@ -215,6 +216,112 @@ export class EjecucionRutasService {
         longitudInicio: dto.longitudInicio,
         odometroInicio: dto.odometroInicio,
       });
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      await queryRunner.release();
+      throw error;
+    }
+  }
+
+  async finalizar(
+    ejecucionRutaId: string,
+    dto: FinalizarEjecucionRutaDto,
+    user: Usuario,
+  ) {
+    const ejecucion = await this.ejecucionRutaRepo.findOne({
+      where: { id: ejecucionRutaId },
+      relations: {
+        asignacionRuta: { conductor: true },
+      },
+    });
+
+    if (!ejecucion?.asignacionRuta) {
+      throw new NotFoundException(
+        `No se encontró una ejecución de ruta con id: ${ejecucionRutaId}`,
+      );
+    }
+
+    if (!ejecucion.tiempoInicio) {
+      return buildResponse(
+        HttpStatus.CONFLICT,
+        'La ejecución de ruta aún no ha sido iniciada.',
+      );
+    }
+
+    if (ejecucion.tiempoFin) {
+      return buildResponse(
+        HttpStatus.CONFLICT,
+        'La ejecución de ruta ya fue finalizada.',
+      );
+    }
+
+    if (
+      ejecucion.estado === EstadoEjecucionRutaEnum.COMPLETADO ||
+      ejecucion.estado === EstadoEjecucionRutaEnum.CANCELADO
+    ) {
+      return buildResponse(
+        HttpStatus.CONFLICT,
+        'No se puede finalizar una ejecución completada o cancelada.',
+      );
+    }
+
+    const asignacion = ejecucion.asignacionRuta;
+
+    if (ESTADOS_ASIGNACION_NO_INICIABLES.has(asignacion.estado)) {
+      return buildResponse(
+        HttpStatus.CONFLICT,
+        'No se puede finalizar una ejecución cuya asignación está completada o cancelada.',
+      );
+    }
+
+    if (
+      ejecucion.odometroInicio != null &&
+      dto.odometroFin < Number(ejecucion.odometroInicio)
+    ) {
+      return buildResponse(
+        HttpStatus.BAD_REQUEST,
+        'El odómetro final no puede ser menor al odómetro inicial.',
+      );
+    }
+
+    this.assertUsuarioPuedeIniciar(user, asignacion);
+
+    const ahora = new Date();
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      ejecucion.tiempoFin = ahora;
+      ejecucion.estado = EstadoEjecucionRutaEnum.COMPLETADO;
+      ejecucion.cerradoPorUsuario = { id: user.id } as Usuario;
+      ejecucion.latitudFin = dto.latitudFin;
+      ejecucion.longitudFin = dto.longitudFin;
+      ejecucion.odometroFin = dto.odometroFin;
+      ejecucion.updatedAt = ahora;
+
+      await queryRunner.manager.save(ejecucion);
+
+      asignacion.estado = EstadoAsignacionRutaEnum.COMPLETADO;
+      asignacion.updatedAt = ahora;
+      await queryRunner.manager.save(asignacion);
+
+      await queryRunner.commitTransaction();
+      await queryRunner.release();
+
+      return buildResponse(
+        HttpStatus.OK,
+        'Ejecución de ruta finalizada correctamente.',
+        {
+          ejecucionId: ejecucion.id,
+          asignacionId: asignacion.id,
+          tiempoFin: ahora,
+          latitudFin: dto.latitudFin,
+          longitudFin: dto.longitudFin,
+          odometroFin: dto.odometroFin,
+          estado: ejecucion.estado,
+        },
+      );
     } catch (error) {
       await queryRunner.rollbackTransaction();
       await queryRunner.release();
