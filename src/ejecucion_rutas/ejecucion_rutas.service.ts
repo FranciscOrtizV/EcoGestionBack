@@ -44,6 +44,7 @@ const ESTADOS_EJECUCION_NO_INICIABLES = new Set<EstadoEjecucionRutaEnum>([
 export type EvidenciaPuntoItemDto = {
   id: string;
   fileUrl: string;
+  urlFoto: string;
   fileName: string;
   mimeType: string;
   fileSizeBytes: number | null;
@@ -51,6 +52,7 @@ export type EvidenciaPuntoItemDto = {
   longitud: number | null;
   takenAt: Date | null;
   createdAt: Date;
+  origen: 'PUNTO' | 'INCIDENCIA';
 };
 
 export type PuntoEjecucionRutaItemDto = {
@@ -67,6 +69,7 @@ export type PuntoEjecucionRutaItemDto = {
   comentarios: string | null;
   estimacionParadaMinutos: number | null;
   evidencias: EvidenciaPuntoItemDto[];
+  fotos: string[];
 };
 
 export type ResumenEjecucionRutaDto = {
@@ -121,10 +124,23 @@ export class EjecucionRutasService {
     return `${pad(horas)}:${pad(minutos)}:${pad(segundos)}`;
   }
 
-  private mapEvidenciaToDto(evidencia: Evidencia): EvidenciaPuntoItemDto {
+  private resolverUrlFoto(fileUrl: string): string {
+    if (/^https?:\/\//i.test(fileUrl)) return fileUrl;
+
+    const base = (process.env.API_PUBLIC_URL ?? '').replace(/\/$/, '');
+    return base ? `${base}${fileUrl}` : fileUrl;
+  }
+
+  private mapEvidenciaToDto(
+    evidencia: Evidencia,
+    origen: 'PUNTO' | 'INCIDENCIA',
+  ): EvidenciaPuntoItemDto {
+    const fileUrl = evidencia.fileUrl;
+
     return {
       id: evidencia.id,
-      fileUrl: evidencia.fileUrl,
+      fileUrl,
+      urlFoto: this.resolverUrlFoto(fileUrl),
       fileName: evidencia.fileName,
       mimeType: evidencia.mimeType,
       fileSizeBytes:
@@ -137,7 +153,17 @@ export class EjecucionRutasService {
         evidencia.longitud != null ? Number(evidencia.longitud) : null,
       takenAt: evidencia.takenAt ?? null,
       createdAt: evidencia.createdAt,
+      origen,
     };
+  }
+
+  private obtenerPuntoIdDeEvidencia(
+    evidencia: Evidencia,
+  ): string | undefined {
+    return (
+      evidencia.puntoEjecucionRuta?.id ??
+      evidencia.incidencia?.puntoEjecucionRuta?.id
+    );
   }
 
   async iniciar(
@@ -424,7 +450,7 @@ export class EjecucionRutasService {
         });
 
         const evidenciaGuardada = await queryRunner.manager.save(evidencia);
-        evidenciaCreada = this.mapEvidenciaToDto(evidenciaGuardada);
+        evidenciaCreada = this.mapEvidenciaToDto(evidenciaGuardada, 'PUNTO');
       }
 
       await queryRunner.commitTransaction();
@@ -544,7 +570,7 @@ export class EjecucionRutasService {
         });
 
         const evidenciaGuardada = await queryRunner.manager.save(evidencia);
-        evidenciaCreada = this.mapEvidenciaToDto(evidenciaGuardada);
+        evidenciaCreada = this.mapEvidenciaToDto(evidenciaGuardada, 'INCIDENCIA');
       }
 
       await queryRunner.commitTransaction();
@@ -655,38 +681,52 @@ export class EjecucionRutasService {
 
     if (puntoIds.length > 0) {
       const evidencias = await this.evidenciaRepo.find({
-        where: { puntoEjecucionRuta: { id: In(puntoIds) } },
-        relations: { puntoEjecucionRuta: true },
+        where: [
+          { puntoEjecucionRuta: { id: In(puntoIds) } },
+          { incidencia: { puntoEjecucionRuta: { id: In(puntoIds) } } },
+        ],
+        relations: {
+          puntoEjecucionRuta: true,
+          incidencia: { puntoEjecucionRuta: true },
+        },
         order: { createdAt: 'ASC' },
       });
 
       for (const evidencia of evidencias) {
-        const puntoId = evidencia.puntoEjecucionRuta?.id;
+        const puntoId = this.obtenerPuntoIdDeEvidencia(evidencia);
         if (!puntoId) continue;
 
+        const origen: 'PUNTO' | 'INCIDENCIA' =
+          evidencia.puntoEjecucionRuta?.id === puntoId ? 'PUNTO' : 'INCIDENCIA';
+
         const evidenciasPunto = evidenciasPorPunto.get(puntoId) ?? [];
-        evidenciasPunto.push(this.mapEvidenciaToDto(evidencia));
+        evidenciasPunto.push(this.mapEvidenciaToDto(evidencia, origen));
         evidenciasPorPunto.set(puntoId, evidenciasPunto);
       }
     }
 
-    return puntos.map((punto) => ({
-      id: punto.id,
-      nombre: punto.puntoRecoleccion.nombre,
-      direccion: punto.puntoRecoleccion.direccion,
-      nombreZona: punto.puntoRecoleccion.zona.nombre,
-      estado: punto.estado,
-      tiempoChequeo: punto.tiempoChequeo ?? null,
-      tipoPunto: punto.puntoRecoleccion.tipoPunto,
-      ordenSecuencia: punto.ordenSecuencia,
-      latitud:
-        punto.latitud != null ? Number(punto.latitud) : null,
-      longitud:
-        punto.longitud != null ? Number(punto.longitud) : null,
-      comentarios: punto.comentarios ?? null,
-      estimacionParadaMinutos:
-        punto.puntoRuta.estimacionParadaMinutos ?? null,
-      evidencias: evidenciasPorPunto.get(punto.id) ?? [],
-    }));
+    return puntos.map((punto) => {
+      const evidencias = evidenciasPorPunto.get(punto.id) ?? [];
+
+      return {
+        id: punto.id,
+        nombre: punto.puntoRecoleccion.nombre,
+        direccion: punto.puntoRecoleccion.direccion,
+        nombreZona: punto.puntoRecoleccion.zona.nombre,
+        estado: punto.estado,
+        tiempoChequeo: punto.tiempoChequeo ?? null,
+        tipoPunto: punto.puntoRecoleccion.tipoPunto,
+        ordenSecuencia: punto.ordenSecuencia,
+        latitud:
+          punto.latitud != null ? Number(punto.latitud) : null,
+        longitud:
+          punto.longitud != null ? Number(punto.longitud) : null,
+        comentarios: punto.comentarios ?? null,
+        estimacionParadaMinutos:
+          punto.puntoRuta.estimacionParadaMinutos ?? null,
+        evidencias,
+        fotos: evidencias.map((e) => e.urlFoto),
+      };
+    });
   }
 }
